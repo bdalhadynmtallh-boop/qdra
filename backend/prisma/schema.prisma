@@ -1,0 +1,249 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptionExpiresAt DateTime?
+  role                  String    @default("USER")
+  isActive              Boolean   @default(true)
+  lastLoginAt           DateTime?
+
+  sessions        Session[]
+  activationCodes ActivationCode[]
+  adminActivities AdminActivity[]  @relation("AdminActivities")
+
+  progress          UserProgress[]
+  questionAttempts  QuestionAttempt[]
+  favorites         FavoriteQuestion[]
+  simulatorAttempts SimulatorAttempt[]
+  stats             UserStats?
+  
+  // ⬇️ تم إضافة ربط دروس الأساسيات
+  basicLessons      BasicLessonProgress[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model ActivationCode {
+  id           String  @id @default(cuid())
+  code         String  @unique
+  durationDays Int     @default(30)
+  used         Boolean @default(false)
+
+  userId      String?
+  activatedAt DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([used])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model EmailVerificationCode {
+  id        String   @id @default(cuid())
+  email     String
+  codeHash  String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([email])
+  @@index([expiresAt])
+  @@index([used])
+}
+
+model AdminActivity {
+  id        String   @id @default(cuid())
+  adminId   String
+  action    String
+  target    String?
+  targetId  String?
+  details   String?
+  createdAt DateTime @default(now())
+
+  admin User @relation("AdminActivities", fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([createdAt])
+  @@index([action])
+}
+
+/**
+ * =========================================
+ * تقدم المستخدم في الأقسام
+ * =========================================
+ */
+
+model UserProgress {
+  id        String @id @default(cuid())
+  userId    String
+  sectionId Int
+
+  completed Boolean @default(false)
+
+  lastQuestion      Int @default(0)
+  questionsAnswered Int @default(0)
+  correctAnswers    Int @default(0)
+  wrongAnswers      Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sectionId])
+  @@index([userId])
+  @@index([sectionId])
+}
+
+/**
+ * =========================================
+ * إجابات المستخدم على الأسئلة
+ * =========================================
+ */
+
+model QuestionAttempt {
+  id String @id @default(cuid())
+
+  userId     String
+  questionId String
+  sectionId  Int
+
+  selectedAnswer Int
+  correctAnswer  Int
+  isCorrect      Boolean
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([questionId])
+  @@index([sectionId])
+  @@index([userId, questionId])
+}
+
+/**
+ * =========================================
+ * الأسئلة المفضلة
+ * =========================================
+ */
+
+model FavoriteQuestion {
+  id String @id @default(cuid())
+
+  userId     String
+  questionId String
+  sectionId  Int
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, questionId])
+  @@index([userId])
+  @@index([questionId])
+}
+
+/**
+ * =========================================
+ * نتائج المحاكيات
+ * =========================================
+ */
+
+model SimulatorAttempt {
+  id String @id @default(cuid())
+
+  userId String
+
+  totalQuestions Int
+  correctAnswers Int
+  wrongAnswers   Int
+
+  score Float?
+
+  startedAt   DateTime
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+/**
+ * =========================================
+ * إحصائيات المستخدم
+ * =========================================
+ */
+
+model UserStats {
+  id String @id @default(cuid())
+
+  userId String @unique
+
+  totalQuestions Int @default(0)
+  correctAnswers Int @default(0)
+  wrongAnswers   Int @default(0)
+
+  completedSections Int @default(0)
+
+  totalSimulators    Int    @default(0)
+  bestSimulatorScore Float?
+
+  totalStudyTimeSeconds Int @default(0)
+
+  lastActivityAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/**
+ * =========================================
+ * تقدم المستخدم في دروس الأساسيات (جديد)
+ * =========================================
+ */
+model BasicLessonProgress {
+  id        String   @id @default(cuid())
+  userId    String
+  topicId   String   // مثال: "analogy-understanding"
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, topicId]) // يمنع تكرار نفس الدرس لنفس المستخدم
+  @@index([userId])
+}

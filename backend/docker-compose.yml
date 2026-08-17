@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: rhal-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: rhal
+      POSTGRES_PASSWORD: rhal_password
+      POSTGRES_DB: rhal
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - rhal_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  rhal_postgres_data:

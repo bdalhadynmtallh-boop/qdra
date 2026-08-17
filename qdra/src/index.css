@@ -1,0 +1,316 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Tajawal", "Segoe UI", sans-serif;
+
+  /* =========================
+     GOLD
+     ========================= */
+
+  --color-gold-50: #fbf6e9;
+  --color-gold-100: #f5e9c4;
+  --color-gold-200: #ecd68e;
+  --color-gold-300: #e2c05e;
+  --color-gold-400: #d8ae3f;
+  --color-gold-500: #c89b2e;
+  --color-gold-600: #a87f22;
+  --color-gold-700: #86651c;
+  --color-gold-800: #5f4813;
+  --color-gold-900: #40300d;
+
+  /* =========================
+     INK - THEME VARIABLES
+     ========================= */
+
+  --color-ink-50: var(--ink-50);
+  --color-ink-100: var(--ink-100);
+  --color-ink-200: var(--ink-200);
+  --color-ink-300: var(--ink-300);
+  --color-ink-400: var(--ink-400);
+  --color-ink-500: var(--ink-500);
+  --color-ink-600: var(--ink-600);
+  --color-ink-700: var(--ink-700);
+  --color-ink-800: var(--ink-800);
+  --color-ink-900: var(--ink-900);
+  --color-ink-950: var(--ink-950);
+}
+
+/* =========================================================
+   الوضع الأسود - الوضع الافتراضي
+   ========================================================= */
+
+:root {
+  --ink-50: #f5f5f6;
+  --ink-100: #e5e5e7;
+  --ink-200: #c3c3c8;
+  --ink-300: #9a9aa2;
+  --ink-400: #6c6c76;
+  --ink-500: #45454e;
+  --ink-600: #2c2c33;
+  --ink-700: #1c1c21;
+  --ink-800: #121215;
+  --ink-900: #09090b;
+  --ink-950: #050506;
+
+  --page-bg: #050506;
+  --page-text: #f5f5f6;
+
+  --glass-bg-1: rgba(255, 255, 255, 0.06);
+  --glass-bg-2: rgba(255, 255, 255, 0.015);
+
+  --glass-border: rgba(200, 155, 46, 0.18);
+
+  --soft-white: rgba(255, 255, 255, 0.05);
+  --soft-white-hover: rgba(255, 255, 255, 0.10);
+
+  --header-border: rgba(255, 255, 255, 0.05);
+}
+
+/* =========================================================
+   الوضع النهاري
+   ========================================================= */
+
+html.light {
+  --ink-50: #18181b;
+  --ink-100: #27272a;
+  --ink-200: #3f3f46;
+  --ink-300: #52525b;
+  --ink-400: #71717a;
+  --ink-500: #a1a1aa;
+  --ink-600: #d4d4d8;
+  --ink-700: #e4e4e7;
+  --ink-800: #f1f1f2;
+  --ink-900: #f7f7f8;
+  --ink-950: #ffffff;
+
+  --page-bg: #ffffff;
+  --page-text: #18181b;
+
+  --glass-bg-1: rgba(255, 255, 255, 0.92);
+  --glass-bg-2: rgba(248, 248, 248, 0.88);
+
+  --glass-border: rgba(168, 127, 34, 0.20);
+
+  --soft-white: rgba(0, 0, 0, 0.045);
+  --soft-white-hover: rgba(0, 0, 0, 0.08);
+
+  --header-border: rgba(0, 0, 0, 0.08);
+}
+
+/* =========================================================
+   GENERAL
+   ========================================================= */
+
+html {
+  scroll-behavior: smooth;
+  background: var(--page-bg);
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--page-bg);
+  color: var(--page-text);
+  min-height: 100vh;
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease;
+}
+
+/* =========================================================
+   SCROLLBAR
+   ========================================================= */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    var(--color-gold-600),
+    var(--color-gold-800)
+  );
+  border-radius: 999px;
+}
+
+/* =========================================================
+   COMPONENTS
+   ========================================================= */
+
+@layer components {
+  .glass-card {
+    background: linear-gradient(
+      145deg,
+      var(--glass-bg-1),
+      var(--glass-bg-2)
+    );
+
+    border: 1px solid var(--glass-border);
+
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+
+    box-shadow:
+      0 8px 32px -8px rgba(0, 0, 0, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+    transition:
+      background 0.25s ease,
+      border-color 0.25s ease,
+      box-shadow 0.25s ease;
+  }
+
+  .gold-text {
+    background: linear-gradient(
+      90deg,
+      var(--color-gold-300),
+      var(--color-gold-500) 45%,
+      var(--color-gold-300)
+    );
+
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .btn-gold {
+    background: linear-gradient(
+      135deg,
+      var(--color-gold-300),
+      var(--color-gold-600)
+    );
+
+    color: #14100a;
+    font-weight: 700;
+
+    box-shadow: 0 10px 30px -8px rgba(200, 155, 46, 0.55);
+
+    transition:
+      transform 0.18s ease,
+      box-shadow 0.18s ease,
+      filter 0.18s ease;
+  }
+
+  .btn-gold:hover {
+    filter: brightness(1.08);
+    box-shadow: 0 14px 36px -6px rgba(200, 155, 46, 0.7);
+  }
+
+  .btn-gold:active {
+    transform: scale(0.96);
+  }
+
+  .press {
+    transition: transform 0.15s ease;
+  }
+
+  .press:active {
+    transform: scale(0.95);
+  }
+}
+
+/* =========================================================
+   WHITE UTILITIES ADAPT TO LIGHT MODE
+   ========================================================= */
+
+/*
+  بعض الصفحات تستخدم:
+  bg-white/5
+  bg-white/10
+  border-white/5
+  border-white/10
+
+  بدل ما نعدل كل الصفحات، نخليها تتكيف تلقائيًا.
+*/
+
+html.light .bg-white\/5 {
+  background-color: rgba(0, 0, 0, 0.045);
+}
+
+html.light .bg-white\/10 {
+  background-color: rgba(0, 0, 0, 0.08);
+}
+
+html.light .hover\:bg-white\/5:hover {
+  background-color: rgba(0, 0, 0, 0.045);
+}
+
+html.light .hover\:bg-white\/10:hover {
+  background-color: rgba(0, 0, 0, 0.08);
+}
+
+html.light .border-white\/5 {
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+html.light .border-white\/10 {
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+/* =========================================================
+   BACKGROUND TRANSITION
+   ========================================================= */
+
+html,
+body,
+#root {
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease;
+}
+
+/* =========================================================
+   ANIMATIONS
+   ========================================================= */
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.35s ease both;
+}
+
+@keyframes pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-pop-in {
+  animation: pop-in 0.25s ease both;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background-size: 200% 100%;
+  animation: shimmer 2.2s linear infinite;
+}
