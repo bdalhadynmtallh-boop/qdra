@@ -1,7 +1,15 @@
 // يحول localhost إلى IP الجهاز تلقائياً إذا تم الفتح من الجوال في الشبكة المحلية
+// ويدعم Vercel (الإنتاج)
 const getApiUrl = () => {
   if (typeof window !== "undefined") {
     const hostname = window.location.hostname;
+    
+    // 🌐 على Vercel (الإنتاج) — استخدم رابط Render السحابي
+    if (hostname.includes("vercel.app")) {
+      return "https://qdra-1.onrender.com";
+    }
+    
+    // 📱 على الشبكة المحلية (الجوال) — استخدم IP الجهاز
     if (hostname !== "localhost" && hostname !== "127.0.0.1") {
       return `http://${hostname}:3000`;
     }
