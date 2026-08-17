@@ -214,6 +214,9 @@ model UserStats {
   totalQuestions Int @default(0)
   correctAnswers Int @default(0)
   wrongAnswers   Int @default(0)
+  
+  // ⬇️ جديد: مجموع المحاولات الحقيقية (يزيد مع كل إجابة، حتى لو نفس السؤال)
+  totalAttempts  Int @default(0)
 
   completedSections Int @default(0)
 
@@ -223,6 +226,10 @@ model UserStats {
   totalStudyTimeSeconds Int @default(0)
 
   lastActivityAt DateTime?
+
+  // ⬇️ حقول الستريك (سلسلة الأيام المتتالية)
+  streakCount    Int     @default(0)
+  lastActiveDate String? // بصيغة YYYY-MM-DD
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

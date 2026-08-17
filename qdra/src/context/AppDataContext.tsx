@@ -23,7 +23,6 @@ interface AppDataContextValue {
   removeMistake: (sectionId: number, questionId: number) => void;
   removeFavorite: (sectionId: number, questionId: number) => void;
   setLastVisited: (sectionId: number) => void;
-  checkAndUpdateStreak: () => void;
 }
 
 const AppDataContext = createContext<AppDataContextValue | null>(null);
@@ -54,23 +53,10 @@ function sameItem(a: { sectionId: number; questionId: number }, b: { sectionId: 
 export function AppDataProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
 
-  // 1. القراءة من التخزين المحلي فوراً عند بدء التشغيل لمنع تصفير الشاشة (Loading)
-  const [state, setState] = useState<AppState>(() => {
-    if (typeof window !== "undefined") {
-      const key = `${LOCAL_STORAGE_KEY}_${user?.id || "guest"}`;
-      const saved = localStorage.getItem(key);
-      if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch {
-          // ignore
-        }
-      }
-    }
-    return createEmptyState();
-  });
+  // نبدأ بحالة فاضية، ونعتمد على السيرفر كمصدر وحيد
+  const [state, setState] = useState<AppState>(createEmptyState());
 
-  // 2. حفظ التغييرات محلياً باستمرار (كنسخة احتياطية وللسرعة)
+  // حفظ في localStorage كنسخة احتياطية فقط
   useEffect(() => {
     if (typeof window !== "undefined") {
       const key = `${LOCAL_STORAGE_KEY}_${user?.id || "guest"}`;
@@ -78,7 +64,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     }
   }, [state, user?.id]);
 
-  // 3. جلب بيانات السيرفر واعتمادها كمصدر وحيد للحقيقة (الحل السحري لمشكلتك!)
+  // المزامنة مع السيرفر كمصدر وحيد للحقيقة
   useEffect(() => {
     let isMounted = true;
 
@@ -88,67 +74,41 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       try {
         const data = await getUserUserData();
         if (isMounted && data?.success) {
+          const serverData = data as any;
           setState((prev) => {
-            // نأخذ البيانات من السيرفر بالكامل، ونحتفظ فقط بـ lastVisited و streakData من المتصفح
             return {
-              progress: data.progress || {},
-              mistakes: data.mistakes || [],
-              favorites: data.favorites || [],
-              totals: data.stats
+              progress: serverData.progress || {},
+              mistakes: serverData.mistakes || [],
+              favorites: serverData.favorites || [],
+              totals: serverData.stats
                 ? {
-                    totalAnswered: data.stats.totalQuestions || 0,
-                    totalCorrect: data.stats.correctAnswers || 0,
-                    totalWrong: data.stats.wrongAnswers || 0,
-                    totalTimeMs: (data.stats.totalStudyTimeSeconds || 0) * 1000,
+                    // ⬇️ جديد: نستخدم totalAttempts (مجموع المحاولات الحقيقية) بدل totalQuestions
+                    totalAnswered: (serverData.stats.correctAnswers || 0) + (serverData.stats.wrongAnswers || 0),
+                    totalCorrect: serverData.stats.correctAnswers || 0,
+                    totalWrong: serverData.stats.wrongAnswers || 0,
+                    totalTimeMs: (serverData.stats.totalStudyTimeSeconds || 0) * 1000,
                   }
                 : prev.totals,
-              // هذي بيانات محلية ما تنرسل للسيرفر، فنخليها كما هي
               lastVisited: prev.lastVisited,
-              streakData: prev.streakData,
+              streakData: serverData.streakData || prev.streakData,
             };
           });
         }
       } catch (err) {
-        console.warn("⚠️ لم يتم الوصول للسيرفر، يتم استخدام التخزين المحلي:", err);
+        console.warn("⚠️ لم يتم الوصول للسيرفر:", err);
       }
     }
 
     syncWithBackend();
 
+    // مزامنة تلقائية كل 30 ثانية
+    const interval = setInterval(syncWithBackend, 30000);
+
     return () => {
       isMounted = false;
+      clearInterval(interval);
     };
   }, [user?.id]);
-
-  const checkAndUpdateStreak = () => {
-    setState((prev) => {
-      const today = new Date().toISOString().split("T")[0];
-      const lastActive = prev.streakData?.lastActiveDate;
-      let currentStreak = prev.streakData?.count ?? 0;
-
-      if (!lastActive) {
-        currentStreak = 1;
-      } else if (lastActive !== today) {
-        const lastDate = new Date(lastActive);
-        const nowDate = new Date(today);
-        const diffInDays = Math.floor((nowDate.getTime() - lastDate.getTime()) / (1000 * 3600 * 24));
-
-        if (diffInDays === 1) {
-          currentStreak += 1;
-        } else if (diffInDays > 1) {
-          currentStreak = 1;
-        }
-      }
-
-      return {
-        ...prev,
-        streakData: {
-          count: currentStreak,
-          lastActiveDate: today,
-        },
-      };
-    });
-  };
 
   const getSectionProgress = (sectionId: number): SectionProgress => {
     return (
@@ -171,10 +131,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     return !!state.progress[sectionId]?.completed;
   };
 
-  // تم إضافة selectedAnswer و correctAnswer عشان الباك إند يحفظهم بدقة
   const recordAnswer = (sectionId: number, questionId: number, selectedAnswer: number, correctAnswer: number, correct: boolean, timeMs: number) => {
-    checkAndUpdateStreak();
-
     setState((prev) => {
       const current = prev.progress[sectionId] ?? { answeredIds: [], correctIds: [], completed: false };
       const answeredIds = current.answeredIds.includes(questionId)
@@ -214,7 +171,6 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       };
     });
 
-    // إرسال البيانات الحقيقية للسيرفر
     recordQuestionAttempt({
       sectionId,
       questionId,
@@ -316,7 +272,6 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       removeMistake,
       removeFavorite,
       setLastVisited,
-      checkAndUpdateStreak,
     }),
     [state]
   );

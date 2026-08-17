@@ -1,5 +1,54 @@
 import type { FastifyInstance } from "fastify";
 
+// دالة مساعدة لتحديث الستريك
+async function updateStreak(fastify: FastifyInstance, userId: string) {
+  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+
+  const stats = await fastify.prisma.userStats.findUnique({
+    where: { userId },
+  });
+
+  if (!stats) {
+    await fastify.prisma.userStats.create({
+      data: {
+        userId,
+        streakCount: 1,
+        lastActiveDate: today,
+      },
+    });
+    return 1;
+  }
+
+  const lastActive = stats.lastActiveDate;
+  let newStreak = stats.streakCount;
+
+  if (!lastActive) {
+    newStreak = 1;
+  } else if (lastActive === today) {
+    return newStreak;
+  } else {
+    const lastDate = new Date(lastActive);
+    const nowDate = new Date(today);
+    const diffInDays = Math.floor((nowDate.getTime() - lastDate.getTime()) / (1000 * 3600 * 24));
+
+    if (diffInDays === 1) {
+      newStreak += 1;
+    } else {
+      newStreak = 1;
+    }
+  }
+
+  await fastify.prisma.userStats.update({
+    where: { userId },
+    data: {
+      streakCount: newStreak,
+      lastActiveDate: today,
+    },
+  });
+
+  return newStreak;
+}
+
 export async function progressRoutes(fastify: FastifyInstance) {
   // =========================================================================
   // 1. جلب كل بيانات وتقدم المستخدم الحقيقية من قاعدة البيانات
@@ -85,8 +134,7 @@ export async function progressRoutes(fastify: FastifyInstance) {
       };
     });
 
-    const formattedFavorites = favorites.map(
-  (f: typeof favorites[number]) => {
+    const formattedFavorites = favorites.map((f: typeof favorites[number]) => {
       const numQ = Number(f.questionId);
       return {
         sectionId: f.sectionId,
@@ -94,12 +142,20 @@ export async function progressRoutes(fastify: FastifyInstance) {
       };
     });
 
+    const streakData = stats
+      ? {
+          count: stats.streakCount || 0,
+          lastActiveDate: stats.lastActiveDate || "",
+        }
+      : { count: 0, lastActiveDate: "" };
+
     return reply.send({
       success: true,
       progress: progressMap,
       mistakes: formattedMistakes,
       favorites: formattedFavorites,
       stats,
+      streakData,
     });
   });
 
@@ -140,24 +196,30 @@ export async function progressRoutes(fastify: FastifyInstance) {
 
     const isFirstTimeAnswering = !previousAttempt;
 
+    const newStreak = await updateStreak(fastify, userId);
+
     await fastify.prisma.userStats.upsert({
       where: { userId },
       update: {
         totalQuestions: isFirstTimeAnswering ? { increment: 1 } : undefined,
+        totalAttempts: { increment: 1 }, // ⬅️ جديد: يزيد كل محاولة
         correctAnswers: isCorrect ? { increment: 1 } : undefined,
         wrongAnswers: !isCorrect ? { increment: 1 } : undefined,
         lastActivityAt: new Date(),
+        streakCount: newStreak,
       },
       create: {
         userId,
         totalQuestions: 1,
+        totalAttempts: 1, // ⬅️ جديد
         correctAnswers: isCorrect ? 1 : 0,
         wrongAnswers: isCorrect ? 0 : 1,
         lastActivityAt: new Date(),
+        streakCount: newStreak,
       },
     });
 
-    return reply.send({ success: true });
+    return reply.send({ success: true, streakCount: newStreak });
   });
 
   // =========================================================================
@@ -170,6 +232,8 @@ export async function progressRoutes(fastify: FastifyInstance) {
     }
 
     const { sectionId, correctAnswers, totalQuestions } = request.body as any;
+
+    const newStreak = await updateStreak(fastify, userId);
 
     await fastify.prisma.userProgress.upsert({
       where: {
@@ -192,7 +256,20 @@ export async function progressRoutes(fastify: FastifyInstance) {
       },
     });
 
-    return reply.send({ success: true });
+    await fastify.prisma.userStats.upsert({
+      where: { userId },
+      update: {
+        completedSections: { increment: 1 },
+        streakCount: newStreak,
+      },
+      create: {
+        userId,
+        completedSections: 1,
+        streakCount: newStreak,
+      },
+    });
+
+    return reply.send({ success: true, streakCount: newStreak });
   });
 
   // =========================================================================
@@ -209,9 +286,9 @@ export async function progressRoutes(fastify: FastifyInstance) {
       select: { topicId: true },
     });
 
-   const completedTopicIds = completedLessons.map(
-  (l: typeof completedLessons[number]) => l.topicId
-);
+    const completedTopicIds = completedLessons.map(
+      (l: typeof completedLessons[number]) => l.topicId
+    );
 
     return reply.send({
       success: true,
@@ -251,7 +328,21 @@ export async function progressRoutes(fastify: FastifyInstance) {
           topicId,
         },
       });
-      return reply.send({ success: true, completed: true });
+
+      const newStreak = await updateStreak(fastify, userId);
+
+      await fastify.prisma.userStats.upsert({
+        where: { userId },
+        update: {
+          streakCount: newStreak,
+        },
+        create: {
+          userId,
+          streakCount: newStreak,
+        },
+      });
+
+      return reply.send({ success: true, completed: true, streakCount: newStreak });
     }
   });
 
@@ -292,5 +383,72 @@ export async function progressRoutes(fastify: FastifyInstance) {
       });
       return reply.send({ success: true, favorited: true });
     }
+  });
+
+    // =========================================================================
+  // 7. إحصائيات آخر 7 أيام (للرسم البياني المتحرك)
+  // =========================================================================
+  fastify.get("/daily-stats", { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const userId = (request as any).user?.id;
+    if (!userId) {
+      return reply.status(401).send({ success: false, message: "غير مصرح" });
+    }
+
+    const days: Array<{ date: string; label: string }> = [];
+    const dayNames = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    const daysSinceSunday = dayOfWeek;
+
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(today.getDate() - daysSinceSunday + i);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      days.push({ date: `${yyyy}-${mm}-${dd}`, label: dayNames[d.getDay()] });
+    }
+
+    const startDate = new Date(days[0].date + "T00:00:00.000Z");
+
+    const attempts = await fastify.prisma.questionAttempt.findMany({
+      where: {
+        userId,
+        createdAt: { gte: startDate },
+      },
+      select: { isCorrect: true, createdAt: true },
+    });
+
+    const map: Record<string, { correct: number; wrong: number }> = {};
+    days.forEach((d) => (map[d.date] = { correct: 0, wrong: 0 }));
+
+    // ⬇️ مصحّح: نتحقق إن createdAt موجود قبل الاستخدام
+   attempts.forEach((att: any) => {
+      if (!att.createdAt) return;
+      
+      const localDate = new Date(att.createdAt);
+      const year = localDate.getFullYear();
+      const month = String(localDate.getMonth() + 1).padStart(2, "0");
+      const day = String(localDate.getDate()).padStart(2, "0");
+      const key = `${year}-${month}-${day}`;
+      
+      if (map[key]) {
+        if (att.isCorrect) {
+          map[key].correct += 1;
+        } else {
+          map[key].wrong += 1;
+        }
+      }
+    });
+
+    const dailyStats = days.map((d) => ({
+      date: d.date,
+      label: d.label,
+      correct: map[d.date].correct,
+      wrong: map[d.date].wrong,
+    }));
+
+    return reply.send({ success: true, dailyStats });
   });
 }

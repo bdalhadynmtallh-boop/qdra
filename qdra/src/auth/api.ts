@@ -277,3 +277,16 @@ export async function toggleBasicLesson(topicId: string) {
     body: JSON.stringify({ topicId }),
   });
 }
+
+// ⬇️ جديد: إحصائيات آخر 7 أيام للرسم البياني المتحرك
+export async function getDailyStats() {
+  return request<{
+    success: boolean;
+    dailyStats: Array<{
+      date: string;
+      label: string;
+      correct: number;
+      wrong: number;
+    }>;
+  }>("/api/progress/daily-stats");
+}
