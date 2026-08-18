@@ -38,11 +38,55 @@ function hashCode(code: string): string {
   return crypto.createHash("sha256").update(code).digest("hex");
 }
 
-/*
-|--------------------------------------------------------------------------
-| REGISTER (العملاء: تسجيل حساب برمز تفعيل ودخول مباشر)
-|--------------------------------------------------------------------------
-*/
+// التحقق من كود التفعيل (يدعم Master Code + قاعدة البيانات)
+async function validateActivationCode(
+  prisma: any,
+  code: string
+): Promise<{
+  valid: boolean;
+  message: string;
+  durationDays: number;
+  activationId?: string;
+  isMaster: boolean;
+}> {
+  const MASTER_CODE = process.env.ACTIVATION_CODE;
+
+  // أولاً: تحقق من Master Code (من البيئة)
+  if (MASTER_CODE && code === MASTER_CODE.trim()) {
+    return {
+      valid: true,
+      message: "Master code",
+      durationDays: 365,
+      isMaster: true,
+    };
+  }
+
+  // ثانياً: ابحث في قاعدة البيانات
+  const activation = await prisma.activationCode.findUnique({
+    where: { code },
+  });
+
+  if (!activation) {
+    return { valid: false, message: "رمز التفعيل غير صحيح", durationDays: 0, isMaster: false };
+  }
+
+  if (activation.used) {
+    return { valid: false, message: "رمز التفعيل مستخدم بالفعل", durationDays: 0, isMaster: false };
+  }
+
+  if (activation.expiresAt && activation.expiresAt <= new Date()) {
+    return { valid: false, message: "رمز التفعيل منتهي الصلاحية", durationDays: 0, isMaster: false };
+  }
+
+  return {
+    valid: true,
+    message: "DB code",
+    durationDays: activation.durationDays,
+    activationId: activation.id,
+    isMaster: false,
+  };
+}
+
 export async function register(
   request: FastifyRequest<{ Body: RegisterBody }>,
   reply: FastifyReply
@@ -84,28 +128,17 @@ export async function register(
     });
   }
 
-  const activation = await request.server.prisma.activationCode.findUnique({
-    where: { code: normalizedActivationCode },
-  });
+  // التحقق الموحّد من كود التفعيل
+  const validation = await validateActivationCode(
+    request.server.prisma,
+    normalizedActivationCode
+  );
 
-  if (!activation) {
-    return reply.status(403).send({
+  if (!validation.valid) {
+    // ⬇️ مُصحّح: 400 بدل 403 عشان الفرونت ما يفسرها على إنها "انتهى اشتراكك"
+    return reply.status(400).send({
       success: false,
-      message: "رمز التفعيل غير صحيح",
-    });
-  }
-
-  if (activation.used) {
-    return reply.status(403).send({
-      success: false,
-      message: "رمز التفعيل مستخدم بالفعل",
-    });
-  }
-
-  if (activation.expiresAt && activation.expiresAt <= new Date()) {
-    return reply.status(403).send({
-      success: false,
-      message: "رمز التفعيل منتهي الصلاحية",
+      message: validation.message,
     });
   }
 
@@ -114,18 +147,10 @@ export async function register(
   try {
     const result = await request.server.prisma.$transaction(
       async (tx: Prisma.TransactionClient) => {
-        const currentActivation = await tx.activationCode.findUnique({
-          where: { code: normalizedActivationCode },
-        });
-
-        if (!currentActivation || currentActivation.used) {
-          throw new Error("ACTIVATION_CODE_INVALID");
-        }
-
         const now = new Date();
         const subscriptionExpiresAt = new Date(now);
         subscriptionExpiresAt.setDate(
-          subscriptionExpiresAt.getDate() + currentActivation.durationDays
+          subscriptionExpiresAt.getDate() + validation.durationDays
         );
 
         const createdUser = await tx.user.create({
@@ -144,14 +169,17 @@ export async function register(
           },
         });
 
-        await tx.activationCode.update({
-          where: { id: currentActivation.id },
-          data: {
-            used: true,
-            userId: createdUser.id,
-            activatedAt: now,
-          },
-        });
+        // حدّث كود قاعدة البيانات فقط إذا ما كان Master Code
+        if (!validation.isMaster && validation.activationId) {
+          await tx.activationCode.update({
+            where: { id: validation.activationId },
+            data: {
+              used: true,
+              userId: createdUser.id,
+              activatedAt: now,
+            },
+          });
+        }
 
         return createdUser;
       }
@@ -171,7 +199,7 @@ export async function register(
       success: true,
       requiresVerification: false,
       user: result,
-      token: session.token, // 👈 تم إرجاع التوكن لفرونت إند الجوال
+      token: session.token,
       message: "تم إنشاء الحساب وتفعيل اشتراكك بنجاح",
     });
   } catch (error) {
@@ -183,11 +211,6 @@ export async function register(
   }
 }
 
-/*
-|--------------------------------------------------------------------------
-| LOGIN DIRECT (تطبيق قدرة: دخول مباشر بالبريد وكلمة المرور)
-|--------------------------------------------------------------------------
-*/
 export async function loginDirect(
   request: FastifyRequest<{ Body: DirectLoginBody }>,
   reply: FastifyReply
@@ -236,7 +259,7 @@ export async function loginDirect(
   return reply.send({
     success: true,
     requiresVerification: false,
-    token: session.token, // 👈 تم إرجاع التوكن لفرونت إند الجوال
+    token: session.token,
     user: {
       id: user.id,
       email: user.email,
@@ -247,11 +270,6 @@ export async function loginDirect(
   });
 }
 
-/*
-|--------------------------------------------------------------------------
-| LOGIN WITH OTP (لوحة التحكم: إرسال رمز تحقق للبريد)
-|--------------------------------------------------------------------------
-*/
 export async function login(
   request: FastifyRequest<{ Body: LoginBody }>,
   reply: FastifyReply
@@ -308,11 +326,6 @@ export async function login(
   });
 }
 
-/*
-|--------------------------------------------------------------------------
-| VERIFY LOGIN (لوحة التحكم: التحقق من رمز الـ OTP)
-|--------------------------------------------------------------------------
-*/
 export async function verifyLogin(
   request: FastifyRequest<{ Body: VerifyLoginBody }>,
   reply: FastifyReply
@@ -380,7 +393,7 @@ export async function verifyLogin(
   return reply.send({
     success: true,
     requiresVerification: false,
-    token: session.token, // 👈 تم إرجاع التوكن لفرونت إند الجوال
+    token: session.token,
     user: {
       id: user.id,
       email: user.email,
@@ -390,11 +403,6 @@ export async function verifyLogin(
   });
 }
 
-/*
-|--------------------------------------------------------------------------
-| RESEND LOGIN CODE & LOGOUT
-|--------------------------------------------------------------------------
-*/
 export async function resendLoginCode(
   request: FastifyRequest<{ Body: ResendLoginCodeBody }>,
   reply: FastifyReply
