@@ -90,18 +90,8 @@ export default function SimulatorPage() {
   // =========================================================
   // Refs
   // =========================================================
-  //
-  // السبب:
-  // React state لا يتحدث فوراً.
-  // لو جاوب المستخدم على آخر سؤال ثم استدعينا finishQuiz()
-  // مباشرة، ممكن finishQuiz يشوف النسخة القديمة من userAnswers.
-  //
-  // الـ Ref يتحدث فوراً، لذلك نعتمد عليه وقت إنهاء الاختبار.
-  // =========================================================
 
   const userAnswersRef = useRef<(UserAnswer | null)[]>([]);
-
-  // منع إرسال نفس المحاولة للباك إند أكثر من مرة
   const finishHandledRef = useRef(false);
 
   // =========================================================
@@ -165,8 +155,6 @@ export default function SimulatorPage() {
 
     setQuizQuestions(selected);
     setUserAnswers(emptyAnswers);
-
-    // مهم جداً:
     userAnswersRef.current = emptyAnswers;
 
     setCurrentIndex(0);
@@ -182,7 +170,6 @@ export default function SimulatorPage() {
 
     setStartedAt(Date.now());
 
-    // السماح بحفظ محاولة جديدة
     finishHandledRef.current = false;
 
     setIsStarted(true);
@@ -233,11 +220,6 @@ export default function SimulatorPage() {
       correctAnswer,
     };
 
-    // =======================================================
-    // نحدث الـ Ref أولاً
-    // حتى لو كان هذا آخر سؤال، finishQuiz سيجد الإجابة.
-    // =======================================================
-
     const updated = [
       ...userAnswersRef.current,
     ];
@@ -246,22 +228,34 @@ export default function SimulatorPage() {
 
     userAnswersRef.current = updated;
 
-    // تحديث الـ State للواجهة
     setUserAnswers(updated);
   };
+
+  // =========================================================
+  // الانتقال لأي سؤال مباشرة (جديد)
+  // =========================================================
+
+  const jumpToQuestion = (index: number) => {
+    if (index >= 0 && index < quizQuestions.length) {
+      setCurrentIndex(index);
+    }
+  };
+
+  // =========================================================
+  // حساب الأسئلة المحلولة في الجلسة الحالية (جديد)
+  // =========================================================
+
+  const answeredIndices = useMemo(() => {
+    return userAnswers
+      .map((ans, i) => (ans !== null ? i : -1))
+      .filter((i) => i !== -1);
+  }, [userAnswers]);
 
   // =========================================================
   // إنهاء الاختبار
   // =========================================================
 
   const finishQuiz = () => {
-    // منع الإنهاء مرتين
-    //
-    // مثلاً:
-    // - المستخدم يضغط التالي في آخر سؤال
-    // - وفي نفس الوقت المؤقت ينتهي
-    //
-    // لا نريد إرسال محاولتين للباك إند.
     if (finishHandledRef.current) {
       return;
     }
@@ -281,11 +275,6 @@ export default function SimulatorPage() {
         total: number;
       }
     > = {};
-
-    // =======================================================
-    // نأخذ أحدث نسخة من الإجابات من الـ Ref
-    // وليس من State
-    // =======================================================
 
     const answers = userAnswersRef.current;
 
@@ -315,18 +304,6 @@ export default function SimulatorPage() {
         wrongCount += 1;
       }
 
-      // =====================================================
-      // حفظ إجابة السؤال في النظام الحالي
-      //
-      // هذا يحافظ على:
-      // - الأخطاء
-      // - التقدم
-      // - المفضلة
-      // - إحصائيات الأسئلة
-      //
-      // ولا نغير الباك إند.
-      // =====================================================
-
       recordAnswer(
         item.question.sectionId,
         item.question.id,
@@ -337,20 +314,12 @@ export default function SimulatorPage() {
       );
     });
 
-    // =======================================================
-    // إحصائيات حسب الموضوع
-    // =======================================================
-
     const catStatsArray: CategoryStat[] =
       Object.keys(catMap).map((cat) => ({
         categoryName: cat,
         correct: catMap[cat].correct,
         total: catMap[cat].total,
       }));
-
-    // =======================================================
-    // تحديث نتيجة المحاولة في الواجهة
-    // =======================================================
 
     setRunStats({
       correct: correctCount,
@@ -362,17 +331,10 @@ export default function SimulatorPage() {
 
     setFinished(true);
 
-    // =======================================================
-    // حفظ نتيجة المحاكي في Backend
-    // =======================================================
-
     submitSimulatorAttempt({
       totalQuestions: quizQuestions.length,
-
       correctAnswers: correctCount,
-
       wrongAnswers: wrongCount,
-
       score:
         quizQuestions.length > 0
           ? Math.round(
@@ -381,11 +343,9 @@ export default function SimulatorPage() {
                 100
             )
           : 0,
-
       startedAt: new Date(
         startedAt
       ).toISOString(),
-
       completedAt: new Date().toISOString(),
     }).catch((err) => {
       console.error(
@@ -434,7 +394,6 @@ export default function SimulatorPage() {
         </div>
 
         <div className="glass-card flex flex-col gap-6 rounded-3xl p-6">
-          {/* عدد الأسئلة */}
           <div>
             <label className="mb-2 flex items-center justify-between text-sm font-bold text-ink-100">
               <span className="flex items-center gap-2">
@@ -518,7 +477,6 @@ export default function SimulatorPage() {
             )}
           </div>
 
-          {/* الوقت */}
           <div>
             <label className="mb-2 flex items-center gap-2 text-sm font-bold text-ink-100">
               <Clock
@@ -608,7 +566,6 @@ export default function SimulatorPage() {
             )}
           </div>
 
-          {/* بدء */}
           <button
             onClick={
               startSimulator
@@ -805,7 +762,7 @@ export default function SimulatorPage() {
   }
 
   // =========================================================
-  // داخل الاختبار
+  // داخل الاختبار — مع شبكة التنقل والمؤقت داخل البطاقة
   // =========================================================
 
   return (
@@ -813,7 +770,6 @@ export default function SimulatorPage() {
       <div className="flex items-center justify-between">
         <button
           onClick={() => {
-            // إنهاء الاختبار يدوياً
             finishQuiz();
           }}
           className="press flex items-center gap-1.5 text-sm font-bold text-ink-300 hover:text-gold-300"
@@ -826,20 +782,6 @@ export default function SimulatorPage() {
           المحاكي الشامل
         </span>
       </div>
-
-      {effectiveTimeLimit !== null && (
-        <div className="flex justify-center animate-pop-in">
-          <QuizTimer
-            key={`simulator-${startedAt}`}
-            durationInSeconds={
-              effectiveTimeLimit * 60
-            }
-            onExpire={
-              finishQuiz
-            }
-          />
-        </div>
-      )}
 
       {currentQuestion ? (
         <QuestionView
@@ -865,6 +807,21 @@ export default function SimulatorPage() {
             handleAnswered
           }
           onNext={goNext}
+          answeredIndices={answeredIndices}
+          onJumpToQuestion={jumpToQuestion}
+          headerSlot={
+            effectiveTimeLimit !== null ? (
+              <QuizTimer
+                key={`simulator-${startedAt}`}
+                durationInSeconds={
+                  effectiveTimeLimit * 60
+                }
+                onExpire={
+                  finishQuiz
+                }
+              />
+            ) : undefined
+          }
         />
       ) : (
         <div className="py-10 text-center text-ink-300">

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { CheckCircle2, XCircle, Star, ArrowLeft } from "lucide-react";
 import type { Question } from "../types";
 import { cn } from "../utils/cn";
@@ -19,6 +20,10 @@ interface QuestionViewProps {
   onNext: () => void;
   hideResultImmediately?: boolean;
   autoAdvanceOnCorrect?: boolean;
+  // ⬇️ جديد: للتنقل بين الأسئلة + المؤقت داخل البطاقة
+  answeredIndices?: number[];
+  onJumpToQuestion?: (index: number) => void;
+  headerSlot?: ReactNode;
 }
 
 export default function QuestionView({
@@ -32,6 +37,9 @@ export default function QuestionView({
   onNext,
   hideResultImmediately = true,
   autoAdvanceOnCorrect = false,
+  answeredIndices = [],
+  onJumpToQuestion,
+  headerSlot,
 }: QuestionViewProps) {
   const [selected, setSelected] = useState<number | null>(null);
   const [startedAt, setStartedAt] = useState(() => Date.now());
@@ -39,10 +47,10 @@ export default function QuestionView({
   useEffect(() => {
     setSelected(null);
     setStartedAt(Date.now());
-  }, [question?.id]); // ⬅️ نستخدم question.id بدل question عشان نتجنب re-render غير ضروري
+  }, [question?.id]);
 
   const answered = selected !== null;
-  const correctIndex = question?.correctIndex ?? -1; // ⬅️ حماية لو الحقل مفقود
+  const correctIndex = question?.correctIndex ?? -1;
   const isCorrect = answered && selected === correctIndex;
 
   const handleSelect = (index: number) => {
@@ -51,14 +59,6 @@ export default function QuestionView({
     setSelected(index);
     const correct = index === correctIndex;
     const timeMs = Date.now() - startedAt;
-
-    // ⬇️ تشخيص: اطبع القيم في الكونسول عشان نتأكد
-    console.log("🎯 Selected:", {
-      selectedIndex: index,
-      correctIndex,
-      isCorrect: correct,
-      questionId: question?.id,
-    });
 
     onAnswered(index, correctIndex, correct, timeMs);
 
@@ -72,10 +72,89 @@ export default function QuestionView({
   const progressPercent = Math.round((questionNumber / totalQuestions) * 100);
   const displayCategory = category || (question as Record<string, any>).category;
 
+  const answeredSet = new Set(answeredIndices);
+  const currentIdx = questionNumber - 1;
+
   return (
     <div className="animate-fade-in-up mx-auto w-full max-w-2xl">
+      {/* =========================================================
+          بطاقة التنقل + المؤقت (تصميم جديد)
+      ========================================================= */}
+      {onJumpToQuestion && totalQuestions > 0 && (
+        <div className="glass-card mb-5 rounded-3xl p-4 sm:p-5">
+          {/* الصف العلوي: المؤقت + العداد */}
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>{headerSlot}</div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold text-ink-400">
+                تنقل بين الأسئلة
+              </span>
+              <span className="rounded-full bg-gold-500/10 px-2.5 py-1 text-[10px] font-black text-gold-400">
+                {answeredSet.size} / {totalQuestions} محلولة
+              </span>
+            </div>
+          </div>
+
+          {/* الدواير — صف أفقي قابل للتمرير */}
+          <div className="flex gap-2 overflow-x-auto pb-2">
+            {Array.from({ length: totalQuestions }, (_, i) => {
+              const isCurrent = i === currentIdx;
+              const isAnswered = answeredSet.has(i);
+
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => onJumpToQuestion(i)}
+                  aria-label={`الانتقال إلى السؤال ${i + 1}`}
+                  className={cn(
+                    "press flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 text-xs font-black transition-all duration-200",
+                    isCurrent
+                      ? "scale-110 border-gold-500 bg-gradient-to-br from-gold-400 to-gold-600 text-white shadow-lg shadow-gold-500/40"
+                      : isAnswered
+                        ? "border-ink-50 bg-ink-50 text-ink-950 hover:scale-105"
+                        : "border-ink-50/15 bg-transparent text-ink-400 hover:border-gold-500/60 hover:text-gold-400"
+                  )}
+                >
+                  {i + 1}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* الصف السفلي: شريط التقدم + دليل الألوان */}
+          <div className="mt-3 flex items-center gap-4 border-t border-ink-50/10 pt-3">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-ink-50/10">
+              <div
+                className="h-full rounded-full bg-gradient-to-l from-gold-300 to-gold-600 transition-all duration-500"
+                style={{
+                  width: `${totalQuestions > 0 ? (answeredSet.size / totalQuestions) * 100 : 0}%`,
+                }}
+              />
+            </div>
+
+            <div className="flex shrink-0 items-center gap-3 text-[10px] font-bold text-ink-400">
+              <span className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-full bg-gold-500" />
+                الحالي
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-full bg-ink-50" />
+                محلولة
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-full border border-ink-50/30" />
+                لم تُحل
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* شريط تقدم السؤال */}
       <div className="mb-5 flex items-center gap-3">
-        <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/5">
+        <div className="h-2 flex-1 overflow-hidden rounded-full bg-ink-50/10">
           <div
             className="h-full rounded-full bg-gradient-to-l from-gold-300 to-gold-600 transition-all duration-500"
             style={{ width: `${progressPercent}%` }}
@@ -101,7 +180,7 @@ export default function QuestionView({
 
           <button
             onClick={onToggleFavorite}
-            className="press flex h-9 w-9 items-center justify-center rounded-full bg-white/5 text-gold-300 hover:bg-white/10"
+            className="press flex h-9 w-9 items-center justify-center rounded-full bg-ink-50/5 text-gold-300 hover:bg-ink-50/10"
             aria-label="إضافة للمفضلة"
           >
             <Star size={18} fill={isFavorite ? "currentColor" : "none"} />
@@ -109,7 +188,7 @@ export default function QuestionView({
         </div>
 
         {question.passage && (
-          <div className="mb-4 rounded-2xl border border-white/5 bg-black/30 p-4 text-sm leading-8 text-ink-200">
+          <div className="mb-4 rounded-2xl border border-ink-50/5 bg-ink-950/30 p-4 text-sm leading-8 text-ink-200">
             {question.passage}
           </div>
         )}
@@ -122,7 +201,7 @@ export default function QuestionView({
           <img
             src={question.questionImage}
             alt="صورة السؤال"
-            className="mb-5 w-full rounded-2xl border border-white/5 object-cover"
+            className="mb-5 w-full rounded-2xl border border-ink-50/5 object-cover"
           />
         )}
 
@@ -132,7 +211,7 @@ export default function QuestionView({
             const isRight = index === correctIndex;
 
             let stateClasses =
-              "border-white/10 bg-white/[0.03] hover:border-gold-500/40 hover:bg-white/[0.06]";
+              "border-ink-50/10 bg-ink-50/[0.03] hover:border-gold-500/40 hover:bg-ink-50/[0.06]";
 
             if (hideResultImmediately) {
               if (isSelected) {
@@ -146,7 +225,7 @@ export default function QuestionView({
                 } else if (isSelected && !isRight) {
                   stateClasses = "border-red-500/60 bg-red-500/10 text-red-300";
                 } else {
-                  stateClasses = "border-white/5 bg-white/[0.02] opacity-50";
+                  stateClasses = "border-ink-50/5 bg-ink-50/[0.02] opacity-50";
                 }
               }
             }
@@ -162,7 +241,7 @@ export default function QuestionView({
                 )}
               >
                 <span className="flex items-center gap-3">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/5 text-xs font-bold">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink-50/5 text-xs font-bold">
                     {["أ", "ب", "ج", "د"][index] ?? index + 1}
                   </span>
                   {option}
@@ -205,7 +284,7 @@ export default function QuestionView({
                       <img
                         src={question.explanationImage}
                         alt="صورة الشرح"
-                        className="mt-3 w-full rounded-xl border border-white/5"
+                        className="mt-3 w-full rounded-xl border border-ink-50/5"
                       />
                     )}
                   </div>

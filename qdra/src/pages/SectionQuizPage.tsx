@@ -32,7 +32,7 @@ function formatDuration(ms: number): string {
 
 interface UserAnswer {
   question: any;
-  selectedAnswer: number; // ⬅️ جديد: عشان المراجعة
+  selectedAnswer: number;
   correct: boolean;
   timeMs: number;
 }
@@ -77,7 +77,6 @@ export default function SectionQuizPage() {
   const [sectionStartedAt, setSectionStartedAt] = useState(() => Date.now());
   const [timerResetKey, setTimerResetKey] = useState(0);
 
-  // حالة لتخزين إجابات الأسئلة بالتفصيل لحساب أداء كل موضوع + المراجعة
   const [userAnswers, setUserAnswers] = useState<UserAnswer[]>([]);
 
   useEffect(() => {
@@ -129,7 +128,6 @@ export default function SectionQuizPage() {
   const handleAnswered = (selectedAnswer: number, correctAnswer: number, correct: boolean, timeMs: number) => {
     recordAnswer(sectionId, currentQuestion.id, selectedAnswer, correctAnswer, correct, timeMs);
 
-    // تسجيل إجابة السؤال (مع الإجابة المختارة) — نستبدل أي محاولة سابقة لنفس السؤال
     setUserAnswers((prev) => {
       const others = prev.filter((a) => a.question.id !== currentQuestion.id);
       return [
@@ -149,6 +147,30 @@ export default function SectionQuizPage() {
       timeMs: prev.timeMs + timeMs,
     }));
   };
+
+  const jumpToQuestion = (index: number) => {
+    if (index >= 0 && index < questions.length) {
+      setCurrentIndex(index);
+    }
+  };
+
+  // ✅ إذا القسم مكتمل من قبل: نبدأ فاضي (جولة جديدة)
+  // ✅ إذا مو مكتمل: نحسب تقدمه القديم + إجابات الجلسة الحالية
+  const answeredIndices = useMemo(() => {
+    const progress = getSectionProgress(sectionId);
+    const ids = new Set<string | number>();
+
+    if (!progress.completed) {
+      progress.answeredIds.forEach((qid: string | number) => ids.add(qid));
+    }
+
+    userAnswers.forEach((a) => ids.add(a.question.id));
+
+    return Array.from(ids)
+      .map((qid) => questions.findIndex((q) => q.id === qid))
+      .filter((i) => i !== -1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionId, questions, userAnswers]);
 
   const finishQuiz = () => {
     const totalTime = Date.now() - sectionStartedAt;
@@ -179,7 +201,6 @@ export default function SectionQuizPage() {
     const total = questions.length;
     const percent = total > 0 ? Math.round((runStats.correct / total) * 100) : 0;
 
-    // حساب إحصائيات المواضيع (Categories) للقسم الحالي
     const topicMap: Record<string, { correct: number; total: number }> = {};
 
     userAnswers.forEach((ans) => {
@@ -207,7 +228,6 @@ export default function SectionQuizPage() {
     const masteredTopics = topicStats.filter((t) => t.percent >= 60);
     const needsImprovementTopics = topicStats.filter((t) => t.percent < 60);
 
-    // ترتيب المراجعة حسب ترتيب الأسئلة الأصلي
     const sortedReview = [...userAnswers].sort(
       (a, b) => (a.question.id ?? 0) - (b.question.id ?? 0)
     );
@@ -222,7 +242,6 @@ export default function SectionQuizPage() {
           <p className="mt-2 text-sm text-ink-300">إليك ملخص أدائك بالتفصيل في هذا القسم</p>
         </div>
 
-        {/* الكروت الأربعة الرئيسية */}
         <div className="glass-card grid w-full grid-cols-2 gap-4 rounded-3xl p-6 md:grid-cols-4">
           <div className="flex flex-col items-center gap-1">
             <Percent className="text-gold-400" size={20} />
@@ -246,7 +265,6 @@ export default function SectionQuizPage() {
           </div>
         </div>
 
-        {/* تحليل الأداء حسب الموضوع */}
         {topicStats.length > 0 && (
           <div className="glass-card flex w-full flex-col gap-5 rounded-3xl p-6 text-right">
             <div className="flex items-center gap-2 border-b border-white/10 pb-3 text-sm font-bold text-gold-300">
@@ -310,9 +328,6 @@ export default function SectionQuizPage() {
           </div>
         )}
 
-        {/* =====================================================
-            جديد: مراجعة الأسئلة والإجابات كاملة
-        ===================================================== */}
         {sortedReview.length > 0 && (
           <div className="glass-card flex w-full flex-col gap-4 rounded-3xl p-6 text-right">
             <div className="flex items-center gap-2 border-b border-white/10 pb-3 text-sm font-bold text-gold-300">
@@ -331,7 +346,6 @@ export default function SectionQuizPage() {
                       : "border-red-500/20 bg-red-500/5"
                   )}
                 >
-                  {/* رأس السؤال */}
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-bold text-ink-400">
                       السؤال {i + 1}
@@ -350,17 +364,14 @@ export default function SectionQuizPage() {
                     )}
                   </div>
 
-                  {/* القطعة إن وجدت */}
                   {ans.question.passage && (
                     <div className="rounded-xl border border-white/5 bg-black/30 p-3 text-xs leading-6 text-ink-300">
                       {ans.question.passage}
                     </div>
                   )}
 
-                  {/* نص السؤال */}
                   <p className="text-sm font-bold leading-7 text-ink-50">{ans.question.question}</p>
 
-                  {/* الخيارات */}
                   <div className="flex flex-col gap-2">
                     {ans.question.options.map((opt: string, idx: number) => {
                       const isCorrectOpt = idx === ans.question.correctIndex;
@@ -404,7 +415,6 @@ export default function SectionQuizPage() {
                     })}
                   </div>
 
-                  {/* الشرح */}
                   {ans.question.explanation && (
                     <div className="rounded-xl border border-gold-500/20 bg-gold-500/5 p-3 text-xs leading-6 text-ink-200">
                       <span className="font-bold text-gold-300">الشرح: </span>
@@ -447,16 +457,6 @@ export default function SectionQuizPage() {
         <h2 className="truncate text-sm font-bold text-ink-200">{meta.name}</h2>
       </div>
 
-      {quizDurationSeconds !== null && (
-        <div className="flex justify-center animate-pop-in">
-          <QuizTimer
-            key={`${sectionId}-${timerResetKey}-${quizDurationSeconds}`}
-            durationInSeconds={quizDurationSeconds}
-            onExpire={finishQuiz}
-          />
-        </div>
-      )}
-
       <QuestionView
         key={currentQuestion.id}
         question={currentQuestion}
@@ -467,6 +467,17 @@ export default function SectionQuizPage() {
         onToggleFavorite={() => toggleFavorite(sectionId, currentQuestion.id)}
         onAnswered={handleAnswered}
         onNext={goNext}
+        answeredIndices={answeredIndices}
+        onJumpToQuestion={jumpToQuestion}
+        headerSlot={
+          quizDurationSeconds !== null ? (
+            <QuizTimer
+              key={`${sectionId}-${timerResetKey}-${quizDurationSeconds}`}
+              durationInSeconds={quizDurationSeconds}
+              onExpire={finishQuiz}
+            />
+          ) : undefined
+        }
       />
     </div>
   );
