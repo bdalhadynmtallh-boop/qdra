@@ -10,7 +10,16 @@ function hashToken(token: string) {
 
 export default fp(async (app) => {
   app.decorate("authenticateAdmin", async (request: any, reply: any) => {
-    const token = request.cookies.rhal_session;
+    // ✅ 1) نجرب الكوكي أولاً (للاستخدام المحلي)
+    let token = request.cookies?.rhal_session;
+
+    // ✅ 2) إذا ما فيه كوكي، نقرأ من هيدر Authorization (للوحات على دومينات خارجية)
+    if (!token && request.headers.authorization) {
+      const parts = request.headers.authorization.split(" ");
+      if (parts.length === 2 && parts[0] === "Bearer") {
+        token = parts[1];
+      }
+    }
 
     if (!token) {
       return reply.status(401).send({
@@ -50,9 +59,13 @@ export default fp(async (app) => {
       });
     }
 
-    const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+    // ✅ 3) ندعم أكثر من بريد أدمن (مفصولة بفاصلة)
+    const adminEmails = (process.env.ADMIN_EMAIL || "")
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
 
-    if (!adminEmail) {
+    if (adminEmails.length === 0) {
       request.log.error("ADMIN_EMAIL is not configured");
 
       return reply.status(500).send({
@@ -61,7 +74,7 @@ export default fp(async (app) => {
       });
     }
 
-    if (session.user.email.toLowerCase() !== adminEmail) {
+    if (!adminEmails.includes(session.user.email.toLowerCase())) {
       return reply.status(403).send({
         success: false,
         message: "ليس لديك صلاحية الوصول إلى لوحة التحكم",
