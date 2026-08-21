@@ -1,9 +1,36 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 
+// ✅ قراءة الرابط من متغير البيئة
+const API_URL = import.meta.env.VITE_API_URL || "https://qdra-1.onrender.com";
+
 const api = axios.create({
-  baseURL: "http://localhost:3000",
+  baseURL: API_URL,
   withCredentials: true,
+});
+
+// ✅ interceptor لإرسال التوكن من الكوكيز في الهيدر (يعمل عبر الدومينات)
+api.interceptors.request.use((config) => {
+  const cookies = document.cookie.split(";").reduce((acc, c) => {
+    const [key, value] = c.trim().split("=");
+    if (key && value) acc[key] = decodeURIComponent(value);
+    return acc;
+  }, {} as Record<string, string>);
+
+  const token = cookies.rhal_session;
+  if (token && config.headers) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// ✅ interceptor لحفظ التوكن إذا رجع في response
+api.interceptors.response.use((response) => {
+  const newToken = response.data?.token;
+  if (newToken) {
+    document.cookie = `rhal_session=${newToken}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`;
+  }
+  return response;
 });
 
 interface UserType {
@@ -75,7 +102,6 @@ export default function App() {
   const [userStatusFilter, setUserStatusFilter] = useState<string>("all");
   const [codeSearch, setCodeSearch] = useState("");
 
-  // ⬇️ تعديل: المدة صارت تقبل "custom"، والعدد نصي عشان الكيبورد يشتغل
   const [durationDays, setDurationDays] = useState<number | "custom">(30);
   const [customDays, setCustomDays] = useState("30");
   const [quantity, setQuantity] = useState("1");
@@ -157,7 +183,6 @@ export default function App() {
   const handleCreateCodes = async (event: React.FormEvent) => {
     event.preventDefault();
 
-    // ⬇️ حساب الأيام (سواء من القائمة أو المخصص)
     const days = durationDays === "custom" ? parseInt(customDays, 10) : durationDays;
     if (!days || days <= 0) {
       showToast("أدخل عدد أيام صحيح للمدة", "error");
@@ -265,6 +290,7 @@ export default function App() {
     try {
       await api.post("/api/auth/logout");
     } catch {}
+    document.cookie = "rhal_session=; path=/; max-age=0";
     setIsAuthenticated(false);
     setCurrentUser(null);
     setEmail("");
@@ -590,7 +616,6 @@ function QuickAction({ icon, title, description, onClick }: { icon: string; titl
   );
 }
 
-// ⬇️ جديد: حقل تمديد مخصص (تكتب عدد الأيام اللي تبيه)
 function CustomExtendControl({ onExtend }: { onExtend: (days: number) => void }) {
   const [days, setDays] = useState("");
   return (
