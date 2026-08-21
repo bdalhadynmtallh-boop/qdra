@@ -128,6 +128,7 @@ export default function SectionQuizPage() {
   const handleAnswered = (selectedAnswer: number, correctAnswer: number, correct: boolean, timeMs: number) => {
     recordAnswer(sectionId, currentQuestion.id, selectedAnswer, correctAnswer, correct, timeMs);
 
+    // ✅ نستبدل أي إجابة سابقة لنفس السؤال (عشان التغيير لا ينحسب مرتين)
     setUserAnswers((prev) => {
       const others = prev.filter((a) => a.question.id !== currentQuestion.id);
       return [
@@ -154,8 +155,6 @@ export default function SectionQuizPage() {
     }
   };
 
-  // ✅ إذا القسم مكتمل من قبل: نبدأ فاضي (جولة جديدة)
-  // ✅ إذا مو مكتمل: نحسب تقدمه القديم + إجابات الجلسة الحالية
   const answeredIndices = useMemo(() => {
     const progress = getSectionProgress(sectionId);
     const ids = new Set<string | number>();
@@ -172,10 +171,16 @@ export default function SectionQuizPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sectionId, questions, userAnswers]);
 
+  // ✅ التعديل هنا: حساب النتائج من userAnswers (الإجابات النهائية فقط)
   const finishQuiz = () => {
     const totalTime = Date.now() - sectionStartedAt;
-    completeSection(sectionId, runStats.correct, questions.length, totalTime);
-    setRunStats((prev) => ({ ...prev, timeMs: totalTime }));
+
+    // نحسب من userAnswers اللي يحتوي آخر إجابة لكل سؤال فقط
+    const correct = userAnswers.filter((a) => a.correct).length;
+    const wrong = userAnswers.filter((a) => !a.correct).length;
+
+    completeSection(sectionId, correct, questions.length, totalTime);
+    setRunStats({ correct, wrong, timeMs: totalTime });
     setFinished(true);
   };
 
