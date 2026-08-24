@@ -30,7 +30,6 @@ model User {
   simulatorAttempts SimulatorAttempt[]
   stats             UserStats?
   
-  // ⬇️ تم إضافة ربط دروس الأساسيات
   basicLessons      BasicLessonProgress[]
 }
 
@@ -97,10 +96,34 @@ model AdminActivity {
 
 /**
  * =========================================
+ * أقسام الأسئلة (النظام الجديد)
+ * =========================================
+ * كل قسم يحتوي على 11 سؤال مدمجة داخله في حقل questions (Json)
+ * هذا يطابق البنية الحالية لملفات JSON
+ */
+model Section {
+  id          Int        @id
+  fileId      String     @unique
+  name        String
+  category    String?
+  type        String?
+  description String?
+  questions   Json       // ⬅️ مصفوفة الأسئلة كاملة داخل القسم
+  isActive    Boolean    @default(true)
+  order       Int        @default(0)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  
+  @@index([isActive])
+  @@index([order])
+  @@index([fileId])
+}
+
+/**
+ * =========================================
  * تقدم المستخدم في الأقسام
  * =========================================
  */
-
 model UserProgress {
   id        String @id @default(cuid())
   userId    String
@@ -128,7 +151,6 @@ model UserProgress {
  * إجابات المستخدم على الأسئلة
  * =========================================
  */
-
 model QuestionAttempt {
   id String @id @default(cuid())
 
@@ -155,7 +177,6 @@ model QuestionAttempt {
  * الأسئلة المفضلة
  * =========================================
  */
-
 model FavoriteQuestion {
   id String @id @default(cuid())
 
@@ -177,7 +198,6 @@ model FavoriteQuestion {
  * نتائج المحاكيات
  * =========================================
  */
-
 model SimulatorAttempt {
   id String @id @default(cuid())
 
@@ -205,7 +225,6 @@ model SimulatorAttempt {
  * إحصائيات المستخدم
  * =========================================
  */
-
 model UserStats {
   id String @id @default(cuid())
 
@@ -215,7 +234,6 @@ model UserStats {
   correctAnswers Int @default(0)
   wrongAnswers   Int @default(0)
   
-  // ⬇️ جديد: مجموع المحاولات الحقيقية (يزيد مع كل إجابة، حتى لو نفس السؤال)
   totalAttempts  Int @default(0)
 
   completedSections Int @default(0)
@@ -227,9 +245,8 @@ model UserStats {
 
   lastActivityAt DateTime?
 
-  // ⬇️ حقول الستريك (سلسلة الأيام المتتالية)
   streakCount    Int     @default(0)
-  lastActiveDate String? // بصيغة YYYY-MM-DD
+  lastActiveDate String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -239,18 +256,18 @@ model UserStats {
 
 /**
  * =========================================
- * تقدم المستخدم في دروس الأساسيات (جديد)
+ * تقدم المستخدم في دروس الأساسيات
  * =========================================
  */
 model BasicLessonProgress {
   id        String   @id @default(cuid())
   userId    String
-  topicId   String   // مثال: "analogy-understanding"
+  topicId   String
 
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, topicId]) // يمنع تكرار نفس الدرس لنفس المستخدم
+  @@unique([userId, topicId])
   @@index([userId])
 }

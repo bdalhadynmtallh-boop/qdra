@@ -17,6 +17,7 @@ import {
   X,
   Flame,
   Calendar,
+  FolderOpen, // ← جديد
 } from "lucide-react";
 
 import { cn } from "../utils/cn";
@@ -29,6 +30,7 @@ const DESKTOP_NAV_ITEMS = [
   { to: "/", label: "الرئيسية", icon: Home, end: true },
   { to: "/basics", label: "الأساسيات", icon: BookOpen, end: false },
   { to: "/sections", label: "الأقسام", icon: LayoutGrid, end: false },
+  { to: "/files", label: "الملفات", icon: FolderOpen, end: false }, // ← جديد
   { to: "/simulator", label: "المحاكي", icon: Sparkles, end: false },
   { to: "/mistakes", label: "أخطائي", icon: XCircle, end: false },
   { to: "/favorites", label: "المفضلة", icon: Star, end: false },
@@ -43,6 +45,7 @@ const MOBILE_MAIN_ITEMS = [
 ];
 
 const MOBILE_MORE_ITEMS = [
+  { to: "/files", label: "الملفات", icon: FolderOpen, end: false }, // ← جديد
   { to: "/stats", label: "الإحصائيات", icon: BarChart3, end: false },
   { to: "/mistakes", label: "أخطائي", icon: XCircle, end: false },
   { to: "/favorites", label: "المفضلة", icon: Star, end: false },

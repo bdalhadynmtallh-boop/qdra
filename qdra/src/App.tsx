@@ -8,12 +8,13 @@ import { useAuth } from "./context/AuthContext";
 
 import Layout from "./components/Layout";
 import LandingPage from "./components/LandingPage";
-import SubscriptionExpiredModal from "./components/SubscriptionExpiredModal"; // ⬅️ جديد
+import SubscriptionExpiredModal from "./components/SubscriptionExpiredModal";
 
 import HomePage from "./pages/HomePage";
 import BasicsPage from "./pages/BasicsPage";
 import SectionsPage from "./pages/SectionsPage";
 import SectionQuizPage from "./pages/SectionQuizPage";
+import FilesPage from "./pages/FilesPage"; // ← جديد
 import SimulatorPage from "./pages/SimulatorPage";
 import MistakesPage from "./pages/MistakesPage";
 import FavoritesPage from "./pages/FavoritesPage";
@@ -21,7 +22,7 @@ import StatsPage from "./pages/StatsPage";
 import AuthPage from "./pages/AuthPage";
 
 function AppContent() {
-  const { user, loading, subscriptionExpired } = useAuth(); // ⬅️ أضفنا subscriptionExpired
+  const { user, loading, subscriptionExpired } = useAuth();
   const [showAuth, setShowAuth] = useState(false);
 
   if (loading) {
@@ -94,6 +95,7 @@ function AppContent() {
           <Route path="/basics" element={<BasicsPage />} />
           <Route path="/sections" element={<SectionsPage />} />
           <Route path="/sections/:id" element={<SectionQuizPage />} />
+          <Route path="/files" element={<FilesPage />} /> {/* ← جديد */}
           <Route path="/simulator" element={<SimulatorPage />} />
           <Route path="/mistakes" element={<MistakesPage />} />
           <Route path="/favorites" element={<FavoritesPage />} />
@@ -110,11 +112,6 @@ function AppContent() {
 export default function App() {
   return (
     <ThemeProvider>
-      {/*
-        مهم جدًا:
-        HashRouter أصبح خارج حالة تسجيل الدخول،
-        لذلك AuthPage يقدر يستخدم useNavigate بدون صفحة بيضاء.
-      */}
       <HashRouter>
         <AppContent />
       </HashRouter>

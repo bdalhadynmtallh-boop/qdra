@@ -4,6 +4,7 @@ import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import cors from "@fastify/cors";
+import { sectionRoutes } from "./routes/sections.js";
 
 import { authRoutes } from "./routes/auth.js";
 import { healthRoutes } from "./routes/health.js";
@@ -48,6 +49,10 @@ await app.register(helmet, {
 await app.register(rateLimit, {
   max: 200,
   timeWindow: "1 minute",
+});
+
+await app.register(sectionRoutes, {
+  prefix: "/api",
 });
 
 // ================================

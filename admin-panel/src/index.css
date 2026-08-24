@@ -1,111 +1,498 @@
+/* =========================================================
+   QUDRA ADMIN PANEL
+   Global Styles
+========================================================= */
+
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap");
+
+/* =========================================================
+   THEME
+========================================================= */
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  /* Backgrounds */
+  --bg-app: #0a0d12;
+  --bg-header: #0e131b;
+  --bg-panel: #11161f;
+  --bg-panel-alt: #151b25;
+  --bg-panel-hover: #19212c;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  /* Fields */
+  --bg-field: #0d1219;
+  --bg-field-hover: #101721;
+  --bg-field-focus: #111822;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
+  /* Borders */
+  --border: #2b3544;
+  --border-light: #344052;
+  --border-strong: #435066;
+
+  /* Text */
+  --text-primary: #f4f7fb;
+  --text-secondary: #d2d9e5;
+  --text-muted: #9da9bb;
+  --text-faint: #7e8a9d;
+  --text-placeholder: #69778c;
+
+  /* Brand */
+  --gold: #e8b93f;
+  --gold-hover: #f2c957;
+  --gold-soft: rgba(232, 185, 63, 0.1);
+  --gold-border: rgba(232, 185, 63, 0.28);
+
+  /* Success */
+  --success: #45d49a;
+  --success-soft: rgba(69, 212, 154, 0.1);
+  --success-border: rgba(69, 212, 154, 0.25);
+
+  /* Danger */
+  --danger: #ff747c;
+  --danger-soft: rgba(255, 116, 124, 0.09);
+  --danger-border: #553239;
+
+  /* Other */
+  --blue: #70a5ff;
+  --orange: #f5a742;
+  --purple: #8b8df8;
+
+  /* Shadows */
+  --shadow-sm:
+    0 3px 12px rgba(0, 0, 0, 0.12);
+
+  --shadow-md:
+    0 12px 32px rgba(0, 0, 0, 0.18);
+
+  --shadow-lg:
+    0 30px 90px rgba(0, 0, 0, 0.48);
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 17px;
+  --radius-xl: 22px;
+
+  /* Fonts */
+  --font-arabic:
+    "IBM Plex Sans Arabic",
+    "Tajawal",
+    "Segoe UI",
+    Arial,
+    sans-serif;
+
+  --font-mono:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+
+  /* Global */
+  font-family: var(--font-arabic);
+  font-size: 16px;
+  line-height: 1.65;
+  font-weight: 400;
+
+  color: var(--text-primary);
+  background: var(--bg-app);
+
+  color-scheme: dark;
+
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
+/* =========================================================
+   RESET
+========================================================= */
 
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
-}
-
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+}
+
+html {
+  margin: 0;
+  padding: 0;
+
+  min-width: 320px;
+  min-height: 100%;
+
+  direction: rtl;
+
+  background: var(--bg-app);
+
+  scroll-behavior: smooth;
 }
 
 body {
   margin: 0;
+  padding: 0;
+
+  min-width: 320px;
+  min-height: 100vh;
+  min-height: 100svh;
+
+  background: var(--bg-app);
+  color: var(--text-primary);
+
+  font-family: var(--font-arabic);
+  font-size: 16px;
+  line-height: 1.65;
+
+  overflow-x: hidden;
 }
 
+/* =========================================================
+   ROOT
+
+   مهم:
+   لا نضع max-width هنا لأن App.tsx مسؤول عن عرض المحتوى.
+========================================================= */
+
+#root {
+  width: 100%;
+  min-width: 320px;
+
+  min-height: 100vh;
+  min-height: 100svh;
+
+  margin: 0;
+  padding: 0;
+
+  background: var(--bg-app);
+
+  text-align: start;
+}
+
+/* =========================================================
+   TYPOGRAPHY
+========================================================= */
+
 h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+
+  font-family: var(--font-arabic);
+
+  color: var(--text-primary);
+
+  font-weight: 700;
+
+  line-height: 1.4;
 }
 
 h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
+  font-size: 1.75rem;
 }
+
 h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
+  font-size: 1.2rem;
 }
+
+h3 {
+  font-size: 1.05rem;
+}
+
 p {
   margin: 0;
 }
 
+strong,
+b {
+  font-weight: 700;
+}
+
+small {
+  font-size: 0.8125rem;
+}
+
+/* =========================================================
+   FORM ELEMENTS
+========================================================= */
+
+button,
+input,
+textarea,
+select,
+option {
+  font-family: var(--font-arabic);
+}
+
+button,
+input,
+textarea,
+select {
+  font-size: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+input,
+textarea,
+select {
+  color: var(--text-primary);
+}
+
+textarea {
+  line-height: 1.8;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-placeholder);
+  opacity: 1;
+}
+
+/* Prevent browser autofill from destroying dark style */
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: var(--text-primary);
+
+  -webkit-box-shadow:
+    0 0 0 1000px var(--bg-field) inset;
+
+  box-shadow:
+    0 0 0 1000px var(--bg-field) inset;
+
+  caret-color: var(--text-primary);
+
+  transition:
+    background-color 9999s ease-out 0s;
+}
+
+/* Number input */
+
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+}
+
+/* Checkbox / Radio */
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--gold);
+}
+
+/* =========================================================
+   SELECT
+========================================================= */
+
+select {
+  color-scheme: dark;
+}
+
+select option {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+}
+
+/* =========================================================
+   CODE
+========================================================= */
+
 code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
 }
 
 code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+  display: inline-flex;
+
+  padding: 3px 7px;
+
+  border: 1px solid var(--border);
+
+  border-radius: 6px;
+
+  background: var(--bg-panel-alt);
+
+  color: var(--gold);
+
+  font-size: 0.875rem;
+}
+
+/* =========================================================
+   LINKS
+========================================================= */
+
+a {
+  color: var(--gold);
+
+  text-decoration: none;
+
+  transition:
+    color 0.15s ease;
+}
+
+a:hover {
+  color: var(--gold-hover);
+}
+
+/* =========================================================
+   SELECTION
+========================================================= */
+
+::selection {
+  background:
+    rgba(232, 185, 63, 0.25);
+
+  color: #ffffff;
+}
+
+/* =========================================================
+   FOCUS ACCESSIBILITY
+========================================================= */
+
+:focus-visible {
+  outline:
+    2px solid rgba(232, 185, 63, 0.8);
+
+  outline-offset: 2px;
+}
+
+/*
+   حقول App و SectionsManager لديها focus خاص بها،
+   لذلك لا نحتاج outline إضافي عليها.
+*/
+
+.qd-field:focus-visible,
+.sm-input:focus-visible {
+  outline: none;
+}
+
+/* =========================================================
+   SCROLLBAR
+========================================================= */
+
+* {
+  scrollbar-width: thin;
+
+  scrollbar-color:
+    #364255
+    transparent;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #364255;
+
+  border-radius: 20px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4a586e;
+}
+
+/* =========================================================
+   HORIZONTAL TABLE SCROLL
+========================================================= */
+
+table {
+  border-spacing: 0;
+}
+
+th,
+td {
+  vertical-align: middle;
+}
+
+/* =========================================================
+   BUTTON RESET
+========================================================= */
+
+button {
+  margin: 0;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* =========================================================
+   IMAGE
+========================================================= */
+
+img,
+svg {
+  max-width: 100%;
+}
+
+/* =========================================================
+   MOBILE
+========================================================= */
+
+@media (max-width: 1024px) {
+  :root {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 768px) {
+  body {
+    font-size: 15px;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+  }
+
+  h2 {
+    font-size: 1.125rem;
+  }
+}
+
+/* =========================================================
+   REDUCED MOTION
+========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+
+    transition-duration: 0.01ms !important;
+
+    scroll-behavior: auto !important;
+  }
 }
