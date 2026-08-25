@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { FileText, CheckCircle, Search, FolderOpen } from "lucide-react";
 
 // ⚙️ نفس رابط الباك اند اللي تستخدمه لوحة التحكم
-const API_BASE = "http://localhost:3000";
+const API_BASE = import.meta.env.VITE_API_URL || "https://qdra-1.onrender.com";
 
 export default function FilesPage() {
   const [sections, setSections] = useState<any[]>([]);
