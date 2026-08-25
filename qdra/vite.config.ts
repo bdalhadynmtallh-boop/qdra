@@ -56,6 +56,7 @@ export default defineConfig({
       workbox: {
         // ⬇️ التعديل الوحيد: رفع الحد من 2 ميجا إلى 5 ميجا
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        navigateFallbackDenylist: [/\.pdf$/, /\/pdfs\//],
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
         runtimeCaching: [
           {
