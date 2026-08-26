@@ -128,7 +128,6 @@ export default function SectionQuizPage() {
   const handleAnswered = (selectedAnswer: number, correctAnswer: number, correct: boolean, timeMs: number) => {
     recordAnswer(sectionId, currentQuestion.id, selectedAnswer, correctAnswer, correct, timeMs);
 
-    // ✅ نستبدل أي إجابة سابقة لنفس السؤال (عشان التغيير لا ينحسب مرتين)
     setUserAnswers((prev) => {
       const others = prev.filter((a) => a.question.id !== currentQuestion.id);
       return [
@@ -171,11 +170,9 @@ export default function SectionQuizPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sectionId, questions, userAnswers]);
 
-  // ✅ التعديل هنا: حساب النتائج من userAnswers (الإجابات النهائية فقط)
   const finishQuiz = () => {
     const totalTime = Date.now() - sectionStartedAt;
 
-    // نحسب من userAnswers اللي يحتوي آخر إجابة لكل سؤال فقط
     const correct = userAnswers.filter((a) => a.correct).length;
     const wrong = userAnswers.filter((a) => !a.correct).length;
 
@@ -462,6 +459,14 @@ export default function SectionQuizPage() {
         <h2 className="truncate text-sm font-bold text-ink-200">{meta.name}</h2>
       </div>
 
+      {quizDurationSeconds !== null && (
+        <QuizTimer
+          key={`${sectionId}-${timerResetKey}-${quizDurationSeconds}`}
+          durationInSeconds={quizDurationSeconds}
+          onExpire={finishQuiz}
+        />
+      )}
+
       <QuestionView
         key={currentQuestion.id}
         question={currentQuestion}
@@ -474,15 +479,6 @@ export default function SectionQuizPage() {
         onNext={goNext}
         answeredIndices={answeredIndices}
         onJumpToQuestion={jumpToQuestion}
-        headerSlot={
-          quizDurationSeconds !== null ? (
-            <QuizTimer
-              key={`${sectionId}-${timerResetKey}-${quizDurationSeconds}`}
-              durationInSeconds={quizDurationSeconds}
-              onExpire={finishQuiz}
-            />
-          ) : undefined
-        }
       />
     </div>
   );
