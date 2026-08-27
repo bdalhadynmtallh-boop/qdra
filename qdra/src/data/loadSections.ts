@@ -1,9 +1,21 @@
 import type { Question } from "../types";
+import { getStoredToken } from "../auth/api";
 
 // ========================================
-// 🌐 إعدادات API
+// 🌐 إعدادات API (نفس المنطق من api.ts)
 // ========================================
-const API_BASE = import.meta.env.VITE_API_URL || "https://qdra-1.onrender.com";
+const getApiUrl = () => {
+  if (typeof window !== "undefined") {
+    const hostname = window.location.hostname;
+    if (hostname.includes("vercel.app")) return "https://qdra-1.onrender.com";
+    if (hostname !== "localhost" && hostname !== "127.0.0.1") {
+      return `http://${hostname}:3000`;
+    }
+  }
+  return "http://localhost:3000";
+};
+
+const API_BASE = getApiUrl();
 
 // ========================================
 // 💾 الكاش
@@ -15,7 +27,7 @@ const loadingPromises = new Map<number, Promise<Question[]>>();
 let metadataPromise: Promise<void> | null = null;
 
 // ========================================
-// 📊 جلب أعداد الأسئلة (metadata عامة — آمنة)
+// 📊 جلب أعداد الأسئلة (metadata عامة)
 // ========================================
 export function loadSectionsMetadata(): Promise<void> {
   if (metadataPromise) return metadataPromise;
@@ -40,7 +52,6 @@ export function loadSectionsMetadata(): Promise<void> {
   return metadataPromise;
 }
 
-// بدء الجلب تلقائيًا عند تحميل الوحدة
 loadSectionsMetadata();
 
 // ========================================
@@ -48,11 +59,17 @@ loadSectionsMetadata();
 // ========================================
 async function fetchQuestionsFromAPI(sectionId: number): Promise<Question[]> {
   try {
-    const token = localStorage.getItem("rhal_session") || "";
+    // ✅ استخدام التوكن الصحيح من api.ts
+    const token = getStoredToken();
+
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
 
     const res = await fetch(`${API_BASE}/api/sections/${sectionId}/questions`, {
       credentials: "include",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers,
     });
 
     if (!res.ok) {
