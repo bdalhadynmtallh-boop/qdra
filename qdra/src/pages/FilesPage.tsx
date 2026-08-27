@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { FileText, CheckCircle, Search, FolderOpen } from "lucide-react";
+import { FileText, CheckCircle, Search, FolderOpen, AlertCircle, Loader2 } from "lucide-react";
 
 // ⚙️ نفس رابط الباك اند اللي تستخدمه لوحة التحكم
 const API_BASE = import.meta.env.VITE_API_URL || "https://qdra-1.onrender.com";
@@ -9,11 +9,15 @@ export default function FilesPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "solved" | "unsolved">("all");
+  const [openingFile, setOpeningFile] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/sections`);
+        const res = await fetch(`${API_BASE}/api/sections`, {
+          credentials: "include",
+        });
         const json = await res.json();
         if (json.success && Array.isArray(json.sections)) {
           setSections(json.sections);
@@ -38,9 +42,9 @@ export default function FilesPage() {
           fileId,
           name: s.name || `القسم ${s.id}`,
           category: s.category,
-          questionCount: Array.isArray(s.questions) ? s.questions.length : 0,
-          solvedUrl: `/pdfs/solved/section${fileId}.pdf`,
-          unsolvedUrl: `/pdfs/unsolved/section${fileId}.pdf`,
+          questionCount: Array.isArray(s.questions) ? s.questions.length : s.questionCount || 0,
+          solvedApiUrl: `/api/pdfs/solved/section${fileId}.pdf`,
+          unsolvedApiUrl: `/api/pdfs/unsolved/section${fileId}.pdf`,
         };
       });
   }, [sections]);
@@ -56,18 +60,69 @@ export default function FilesPage() {
     );
   }, [filesData, search]);
 
-  const openPdf = (url: string, sectionName: string) => {
-    fetch(url, { method: "HEAD" })
-      .then((res) => {
-        if (res.ok) {
-          window.open(url, "_blank");
-        } else {
-          alert(`عذراً، ملف "${sectionName}" غير متوفر حالياً.`);
-        }
-      })
-      .catch(() => {
-        alert("تعذر الوصول للملف، حاول مرة أخرى.");
+  // ========================================
+  // 🔐 جلب PDF من السيرفر المحمي وفتحه في تبويب جديد
+  // ========================================
+  const openPdf = async (apiPath: string, sectionName: string) => {
+    const fileKey = `${apiPath}`;
+    setOpeningFile(fileKey);
+    setErrorMessage(null);
+
+    try {
+      const res = await fetch(`${API_BASE}${apiPath}`, {
+        method: "GET",
+        credentials: "include", // 🔐 إرسال كوكي الجلسة
       });
+
+      if (res.status === 401) {
+        setErrorMessage("يجب تسجيل الدخول للوصول إلى ملفات PDF");
+        setOpeningFile(null);
+        return;
+      }
+
+      if (res.status === 403) {
+        setErrorMessage("انتهى اشتراكك — جدّد الاشتراك للوصول إلى الملفات");
+        setOpeningFile(null);
+        return;
+      }
+
+      if (res.status === 404) {
+        setErrorMessage(`ملف "${sectionName}" غير متوفر حالياً`);
+        setOpeningFile(null);
+        return;
+      }
+
+      if (!res.ok) {
+        setErrorMessage(`تعذر تحميل الملف (خطأ ${res.status})`);
+        setOpeningFile(null);
+        return;
+      }
+
+      // تحويل الاستجابة إلى blob
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      // فتح في تبويب جديد
+      const newWindow = window.open(blobUrl, "_blank");
+
+      if (!newWindow) {
+        setErrorMessage("المتصفح منع فتح النافذة. يرجى السماح بالنوافذ المنبثقة لهذا الموقع.");
+        URL.revokeObjectURL(blobUrl);
+        setOpeningFile(null);
+        return;
+      }
+
+      // تنظيف الـ blob URL بعد فترة (عشان المتصفح ما يحتفظ بالذاكرة)
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 60000);
+
+      setOpeningFile(null);
+    } catch (err) {
+      console.error("فشل فتح الملف:", err);
+      setErrorMessage("تعذر الاتصال بالسيرفر، حاول مرة أخرى");
+      setOpeningFile(null);
+    }
   };
 
   if (loading) {
@@ -92,6 +147,20 @@ export default function FilesPage() {
           </p>
         </div>
       </div>
+
+      {/* رسالة الخطأ */}
+      {errorMessage && (
+        <div className="mb-6 flex items-center gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
+          <AlertCircle size={20} className="shrink-0 text-red-400" />
+          <p className="flex-1 text-sm font-semibold text-red-300">{errorMessage}</p>
+          <button
+            onClick={() => setErrorMessage(null)}
+            className="text-xs font-bold text-red-300 hover:text-red-200"
+          >
+            إغلاق
+          </button>
+        </div>
+      )}
 
       {/* STATS */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -166,51 +235,76 @@ export default function FilesPage() {
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((file) => (
-            <div
-              key={file.id}
-              className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/5 transition hover:border-gold-500/40 hover:shadow-lg"
-            >
-              {/* CARD HEADER */}
-              <div className="flex items-center gap-3 border-b border-white/10 p-4">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gold-500/10 text-sm font-black text-gold-400">
-                  {file.fileId}
+          {filtered.map((file) => {
+            const isSolvedOpening = openingFile === file.solvedApiUrl;
+            const isUnsolvedOpening = openingFile === file.unsolvedApiUrl;
+
+            return (
+              <div
+                key={file.id}
+                className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/5 transition hover:border-gold-500/40 hover:shadow-lg"
+              >
+                {/* CARD HEADER */}
+                <div className="flex items-center gap-3 border-b border-white/10 p-4">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gold-500/10 text-sm font-black text-gold-400">
+                    {file.fileId}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="truncate text-sm font-bold text-ink-50">{file.name}</h3>
+                    {file.category && (
+                      <p className="truncate text-xs text-ink-400">{file.category}</p>
+                    )}
+                  </div>
+                  <span className="rounded-md bg-white/10 px-2 py-0.5 text-xs font-bold text-ink-300">
+                    {file.questionCount} سؤال
+                  </span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="truncate text-sm font-bold text-ink-50">{file.name}</h3>
-                  {file.category && (
-                    <p className="truncate text-xs text-ink-400">{file.category}</p>
+
+                {/* BUTTONS */}
+                <div className="flex flex-col gap-2 p-4">
+                  {(filter === "all" || filter === "solved") && (
+                    <button
+                      onClick={() => openPdf(file.solvedApiUrl, `${file.name} (محلول)`)}
+                      disabled={isSolvedOpening}
+                      className="flex items-center justify-center gap-2 rounded-xl bg-emerald-500/10 px-4 py-2.5 text-xs font-bold text-emerald-500 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                    >
+                      {isSolvedOpening ? (
+                        <>
+                          <Loader2 size={16} className="animate-spin" />
+                          جاري الفتح...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle size={16} />
+                          نسخة محلولة
+                        </>
+                      )}
+                    </button>
+                  )}
+
+                  {(filter === "all" || filter === "unsolved") && (
+                    <button
+                      onClick={() => openPdf(file.unsolvedApiUrl, `${file.name} (غير محلول)`)}
+                      disabled={isUnsolvedOpening}
+                      className="flex items-center justify-center gap-2 rounded-xl bg-gold-500/10 px-4 py-2.5 text-xs font-bold text-gold-400 transition hover:bg-gold-500/20 disabled:opacity-50"
+                    >
+                      {isUnsolvedOpening ? (
+                        <>
+                          <Loader2 size={16} className="animate-spin" />
+                          جاري الفتح...
+                        </>
+                      ) : (
+                        <>
+                          <FileText size={16} />
+                          نسخة للمراجعة
+                        </>
+                      )}
+                    </button>
                   )}
                 </div>
-                <span className="rounded-md bg-white/10 px-2 py-0.5 text-xs font-bold text-ink-300">
-                  {file.questionCount} سؤال
-                </span>
               </div>
-
-              {/* BUTTONS */}
-              <div className="flex flex-col gap-2 p-4">
-                {(filter === "all" || filter === "solved") && (
-                  <button
-                    onClick={() => openPdf(file.solvedUrl, `${file.name} (محلول)`)}
-                    className="flex items-center justify-center gap-2 rounded-xl bg-emerald-500/10 px-4 py-2.5 text-xs font-bold text-emerald-500 transition hover:bg-emerald-500/20"
-                  >
-                    <CheckCircle size={16} />
-                    نسخة محلولة
-                  </button>
-                )}
-
-                {(filter === "all" || filter === "unsolved") && (
-                  <button
-                    onClick={() => openPdf(file.unsolvedUrl, `${file.name} (غير محلول)`)}
-                    className="flex items-center justify-center gap-2 rounded-xl bg-gold-500/10 px-4 py-2.5 text-xs font-bold text-gold-400 transition hover:bg-gold-500/20"
-                  >
-                    <FileText size={16} />
-                    نسخة للمراجعة
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

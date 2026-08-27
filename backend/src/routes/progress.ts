@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 // دالة مساعدة لتحديث الستريك
 async function updateStreak(fastify: FastifyInstance, userId: string) {
-  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  const today = new Date().toISOString().split("T")[0];
 
   const stats = await fastify.prisma.userStats.findUnique({
     where: { userId },
@@ -51,7 +51,7 @@ async function updateStreak(fastify: FastifyInstance, userId: string) {
 
 export async function progressRoutes(fastify: FastifyInstance) {
   // =========================================================================
-  // 1. جلب كل بيانات وتقدم المستخدم الحقيقية من قاعدة البيانات
+  // 1. جلب كل بيانات وتقدم المستخدم
   // =========================================================================
   fastify.get("/data", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const userId = (request as any).user?.id;
@@ -160,7 +160,7 @@ export async function progressRoutes(fastify: FastifyInstance) {
   });
 
   // =========================================================================
-  // 2. تسجيل محاولة إجابة سؤال وحفظها في قاعدة البيانات
+  // 2. تسجيل محاولة إجابة سؤال — ✅ معدّل ليحفظ timeMs
   // =========================================================================
   fastify.post("/attempt", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const userId = (request as any).user?.id;
@@ -168,7 +168,9 @@ export async function progressRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ success: false, message: "غير مصرح" });
     }
 
-    const { sectionId, questionId, selectedAnswer, correctAnswer, isCorrect } = request.body as any;
+    // ✅ جديد: استخراج timeMs من الـ body
+    const { sectionId, questionId, selectedAnswer, correctAnswer, isCorrect, timeMs } = request.body as any;
+    const timeSeconds = Math.max(0, Math.round((Number(timeMs) || 0) / 1000));
 
     const strQuestionId = String(questionId);
     const numSectionId = Number(sectionId);
@@ -202,18 +204,21 @@ export async function progressRoutes(fastify: FastifyInstance) {
       where: { userId },
       update: {
         totalQuestions: isFirstTimeAnswering ? { increment: 1 } : undefined,
-        totalAttempts: { increment: 1 }, // ⬅️ جديد: يزيد كل محاولة
+        totalAttempts: { increment: 1 },
         correctAnswers: isCorrect ? { increment: 1 } : undefined,
         wrongAnswers: !isCorrect ? { increment: 1 } : undefined,
+        // ✅ جديد: زيادة وقت الدراسة
+        totalStudyTimeSeconds: timeSeconds > 0 ? { increment: timeSeconds } : undefined,
         lastActivityAt: new Date(),
         streakCount: newStreak,
       },
       create: {
         userId,
         totalQuestions: 1,
-        totalAttempts: 1, // ⬅️ جديد
+        totalAttempts: 1,
         correctAnswers: isCorrect ? 1 : 0,
         wrongAnswers: isCorrect ? 0 : 1,
+        totalStudyTimeSeconds: timeSeconds, // ✅ جديد
         lastActivityAt: new Date(),
         streakCount: newStreak,
       },
@@ -223,7 +228,7 @@ export async function progressRoutes(fastify: FastifyInstance) {
   });
 
   // =========================================================================
-  // 3. إنهاء قسم وحفظه في UserProgress
+  // 3. إنهاء قسم
   // =========================================================================
   fastify.post("/complete-section", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const userId = (request as any).user?.id;
@@ -273,7 +278,7 @@ export async function progressRoutes(fastify: FastifyInstance) {
   });
 
   // =========================================================================
-  // 4. جلب دروس الأساسيات المكتملة للمستخدم
+  // 4. جلب دروس الأساسيات المكتملة
   // =========================================================================
   fastify.get("/basics", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const userId = (request as any).user?.id;
@@ -297,7 +302,7 @@ export async function progressRoutes(fastify: FastifyInstance) {
   });
 
   // =========================================================================
-  // 5. حفظ/إلغاء حفظ درس أساسيات كمكتمل
+  // 5. حفظ/إلغاء حفظ درس أساسيات
   // =========================================================================
   fastify.post("/basics/toggle", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const userId = (request as any).user?.id;
@@ -347,7 +352,7 @@ export async function progressRoutes(fastify: FastifyInstance) {
   });
 
   // =========================================================================
-  // 6. تبديل المفضلة (إضافة/إزالة)
+  // 6. تبديل المفضلة
   // =========================================================================
   fastify.post("/favorites/toggle", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const userId = (request as any).user?.id;
@@ -385,8 +390,8 @@ export async function progressRoutes(fastify: FastifyInstance) {
     }
   });
 
-    // =========================================================================
-  // 7. إحصائيات آخر 7 أيام (للرسم البياني المتحرك)
+  // =========================================================================
+  // 7. إحصائيات آخر 7 أيام
   // =========================================================================
   fastify.get("/daily-stats", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const userId = (request as any).user?.id;
@@ -423,16 +428,15 @@ export async function progressRoutes(fastify: FastifyInstance) {
     const map: Record<string, { correct: number; wrong: number }> = {};
     days.forEach((d) => (map[d.date] = { correct: 0, wrong: 0 }));
 
-    // ⬇️ مصحّح: نتحقق إن createdAt موجود قبل الاستخدام
-   attempts.forEach((att: any) => {
+    attempts.forEach((att: any) => {
       if (!att.createdAt) return;
-      
+
       const localDate = new Date(att.createdAt);
       const year = localDate.getFullYear();
       const month = String(localDate.getMonth() + 1).padStart(2, "0");
       const day = String(localDate.getDate()).padStart(2, "0");
       const key = `${year}-${month}-${day}`;
-      
+
       if (map[key]) {
         if (att.isCorrect) {
           map[key].correct += 1;

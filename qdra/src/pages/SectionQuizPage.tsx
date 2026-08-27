@@ -13,9 +13,10 @@ import {
   TrendingUp,
   AlertCircle,
   ScrollText,
+  Loader2,
 } from "lucide-react";
 import { getSectionMetaById } from "../data/sectionsMeta";
-import { getSectionQuestions } from "../data/loadSections";
+import { loadSectionQuestions } from "../data/loadSections";
 import { useAppData } from "../context/AppDataContext";
 import QuestionView from "../components/QuestionView";
 import EmptyState from "../components/EmptyState";
@@ -69,17 +70,45 @@ export default function SectionQuizPage() {
   } = useAppData();
 
   const meta = getSectionMetaById(sectionId);
-  const questions = useMemo(() => getSectionQuestions(sectionId), [sectionId]);
-
+  
+  // ========================================
+  // ✅ كل الـ States في الأعلى
+  // ========================================
+  const [questions, setQuestions] = useState<any[]>([]);
+  const [loadingQuestions, setLoadingQuestions] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [finished, setFinished] = useState(false);
   const [runStats, setRunStats] = useState({ correct: 0, wrong: 0, timeMs: 0 });
   const [sectionStartedAt, setSectionStartedAt] = useState(() => Date.now());
   const [timerResetKey, setTimerResetKey] = useState(0);
-
   const [userAnswers, setUserAnswers] = useState<UserAnswer[]>([]);
 
+  // ========================================
+  // ✅ كل الـ Effects (قبل الـ returns المبكرة)
+  // ========================================
   useEffect(() => {
+    let isMounted = true;
+    setLoadingQuestions(true);
+    loadSectionQuestions(sectionId)
+      .then((qs) => {
+        if (isMounted) {
+          setQuestions(qs);
+          setLoadingQuestions(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setQuestions([]);
+          setLoadingQuestions(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [sectionId]);
+
+  useEffect(() => {
+    if (loadingQuestions || questions.length === 0) return;
     const progress = getSectionProgress(sectionId);
     const resumeIndex =
       !progress.completed && questions.length > 0
@@ -92,36 +121,7 @@ export default function SectionQuizPage() {
     setSectionStartedAt(Date.now());
     if (meta) setLastVisited(sectionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sectionId, questions.length]);
-
-  if (!meta) {
-    return (
-      <EmptyState
-        title="القسم غير موجود"
-        description="تعذر العثور على هذا القسم."
-        action={
-          <Link to="/sections" className="btn-gold press mt-2 rounded-xl px-5 py-2 text-sm">
-            العودة للأقسام
-          </Link>
-        }
-      />
-    );
-  }
-
-  if (questions.length === 0) {
-    return (
-      <EmptyState
-        title={`${meta.name} — لا توجد أسئلة بعد`}
-        description="لم تتم إضافة أسئلة هذا القسم بعد. أضف ملف الأسئلة الخاص به داخل مجلد src/data/sections لعرضه هنا."
-        action={
-          <Link to="/sections" className="btn-gold press mt-2 flex items-center gap-2 rounded-xl px-5 py-2 text-sm">
-            <LayoutGrid size={16} />
-            العودة للأقسام
-          </Link>
-        }
-      />
-    );
-  }
+  }, [sectionId, questions.length, loadingQuestions]);
 
   const currentQuestion = questions[currentIndex];
 
@@ -154,6 +154,7 @@ export default function SectionQuizPage() {
     }
   };
 
+  // ✅ هذا هو الـ useMemo الذي كان يسبب الخطأ
   const answeredIndices = useMemo(() => {
     const progress = getSectionProgress(sectionId);
     const ids = new Set<string | number>();
@@ -172,7 +173,6 @@ export default function SectionQuizPage() {
 
   const finishQuiz = () => {
     const totalTime = Date.now() - sectionStartedAt;
-
     const correct = userAnswers.filter((a) => a.correct).length;
     const wrong = userAnswers.filter((a) => !a.correct).length;
 
@@ -198,6 +198,48 @@ export default function SectionQuizPage() {
     setSectionStartedAt(Date.now());
     setTimerResetKey((k) => k + 1);
   };
+
+  // ========================================
+  // ✅ الآن الـ Returns المبكرة (بعد كل الـ Hooks)
+  // ========================================
+
+  if (!meta) {
+    return (
+      <EmptyState
+        title="القسم غير موجود"
+        description="تعذر العثور على هذا القسم."
+        action={
+          <Link to="/sections" className="btn-gold press mt-2 rounded-xl px-5 py-2 text-sm">
+            العودة للأقسام
+          </Link>
+        }
+      />
+    );
+  }
+
+  if (loadingQuestions) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
+        <Loader2 size={32} className="animate-spin text-gold-400" />
+        <p className="text-sm font-bold text-ink-300">جاري تحميل أسئلة القسم...</p>
+      </div>
+    );
+  }
+
+  if (questions.length === 0) {
+    return (
+      <EmptyState
+        title={`${meta.name} — لا توجد أسئلة`}
+        description="تأكد من تسجيل الدخول للوصول إلى الأسئلة، أو أنه لم تتم إضافة أسئلة لهذا القسم بعد."
+        action={
+          <Link to="/sections" className="btn-gold press mt-2 flex items-center gap-2 rounded-xl px-5 py-2 text-sm">
+            <LayoutGrid size={16} />
+            العودة للأقسام
+          </Link>
+        }
+      />
+    );
+  }
 
   if (finished) {
     const total = questions.length;

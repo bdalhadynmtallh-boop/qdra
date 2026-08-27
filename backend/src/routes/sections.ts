@@ -2,6 +2,8 @@ import { FastifyInstance } from "fastify";
 import {
   getSectionsForStudents,
   getSectionForStudent,
+  getSectionQuestions,        // ← جديد: جلب الأسئلة (محمي)
+  checkAnswer,                // ← جديد: تصحيح الإجابة (محمي)
   getAllSectionsForAdmin,
   getSectionForAdmin,
   createSection,
@@ -10,15 +12,33 @@ import {
   toggleSection,
   reorderSections,
   importQuestionsJson,
-  syncSectionsFromFiles,  // ← جديد
+  syncSectionsFromFiles,
 } from "../controllers/sections.controller.js";
 
 export async function sectionRoutes(app: FastifyInstance) {
   // ========================================
-  // 🔓 للطلاب (قراءة فقط)
+  // 🔓 PUBLIC — بيانات وصفية فقط (بدون أسئلة!)
   // ========================================
   app.get("/sections", getSectionsForStudents);
   app.get("/sections/:id", getSectionForStudent);
+
+  // ========================================
+  // 🔐 للطلاب المسجلين فقط — الأسئلة الكاملة
+  // ========================================
+  app.get(
+    "/sections/:id/questions",
+    { preHandler: app.authenticate },
+    getSectionQuestions
+  );
+
+  // ========================================
+  // 🔐 للطلاب المسجلين فقط — تصحيح الإجابة في السيرفر
+  // ========================================
+  app.post(
+    "/sections/:id/check",
+    { preHandler: app.authenticate },
+    checkAnswer
+  );
 
   // ========================================
   // 🔐 للأدمن (محمي)
@@ -71,7 +91,7 @@ export async function sectionRoutes(app: FastifyInstance) {
     importQuestionsJson
   );
 
-  // 🔄 جديد: مزامنة الأقسام من ملفات JSON إلى قاعدة البيانات
+  // 🔄 مزامنة الأقسام من ملفات JSON إلى قاعدة البيانات
   app.post(
     "/admin/sections/sync-from-files",
     { preHandler: app.authenticateAdmin },

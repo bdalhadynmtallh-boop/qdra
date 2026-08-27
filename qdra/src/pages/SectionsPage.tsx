@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search } from "lucide-react";
 import { sectionsMeta } from "../data/sectionsMeta";
-import { getSectionQuestionCount } from "../data/loadSections";
+import { getSectionQuestionCount, loadSectionsMetadata } from "../data/loadSections"; // ✅ إضافة loadSectionsMetadata
 import { useAppData } from "../context/AppDataContext";
 import SectionCard from "../components/SectionCard";
 import EmptyState from "../components/EmptyState";
@@ -22,6 +22,20 @@ export default function SectionsPage() {
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const [page, setPage] = useState(1);
 
+  // ✅ جديد: نسخة metadata لإعادة الرسم عند وصول البيانات من السيرفر
+  const [metadataVersion, setMetadataVersion] = useState(0);
+
+  // ✅ جديد: جلب metadata من السيرفر عند فتح الصفحة
+  useEffect(() => {
+    let isMounted = true;
+    loadSectionsMetadata().then(() => {
+      if (isMounted) setMetadataVersion((v) => v + 1);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // حالة التحكم بالقسم المحدد لفتح نافذة تخصيص الوقت
   const [selectedSection, setSelectedSection] = useState<{ id: number; name: string } | null>(null);
 
@@ -33,7 +47,7 @@ export default function SectionsPage() {
       completed: isSectionCompleted(meta.id),
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getSectionPercent, isSectionCompleted]);
+  }, [getSectionPercent, isSectionCompleted, metadataVersion]); // ✅ إضافة metadataVersion
 
   const filtered = useMemo(() => {
     let list = rows;

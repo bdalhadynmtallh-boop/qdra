@@ -85,9 +85,8 @@ function deleteSectionFile(fileId: string) {
 }
 
 // ========================================
-// 🔓 للطلاب (قراءة فقط)
+// 🔓 للطلاب — بيانات وصفية فقط (بدون أسئلة!)
 // ========================================
-
 export async function getSectionsForStudents(
   request: FastifyRequest,
   reply: FastifyReply
@@ -103,13 +102,20 @@ export async function getSectionsForStudents(
       type: true,
       description: true,
       order: true,
-      questions: true,
+      questions: true, // ✅ نجلبها مؤقتاً للحساب فقط
     },
   });
 
   const sectionsWithCount = sections.map((s: any) => ({
-    ...s,
+    id: s.id,
+    fileId: s.fileId,
+    name: s.name,
+    category: s.category,
+    type: s.type,
+    description: s.description,
+    order: s.order,
     questionCount: Array.isArray(s.questions) ? s.questions.length : 0,
+    // ❌ لا نرسل questions نفسها — فقط العدد
   }));
 
   return reply.send({
@@ -132,6 +138,16 @@ export async function getSectionForStudent(
 
   const section = await request.server.prisma.section.findUnique({
     where: { id, isActive: true },
+    select: {
+      id: true,
+      fileId: true,
+      name: true,
+      category: true,
+      type: true,
+      description: true,
+      order: true,
+      questions: true, // ✅ نجلبها مؤقتاً للحساب فقط
+    },
   });
 
   if (!section) {
@@ -144,11 +160,105 @@ export async function getSectionForStudent(
   return reply.send({
     success: true,
     section: {
-      ...section,
-      questionCount: Array.isArray(section.questions)
-        ? section.questions.length
-        : 0,
+      id: section.id,
+      fileId: section.fileId,
+      name: section.name,
+      category: section.category,
+      type: section.type,
+      description: section.description,
+      order: section.order,
+      questionCount: Array.isArray(section.questions) ? section.questions.length : 0,
+      // ❌ لا نرسل questions نفسها
     },
+  });
+}
+
+// ========================================
+// 🔐 جديد: جلب الأسئلة (محمي بـ JWT)
+// ========================================
+export async function getSectionQuestions(
+  request: FastifyRequest,
+  reply: FastifyReply
+) {
+  const id = Number((request.params as any).id);
+  if (isNaN(id)) {
+    return reply.status(400).send({
+      success: false,
+      message: "معرّف القسم غير صحيح",
+    });
+  }
+
+  const section = await request.server.prisma.section.findUnique({
+    where: { id, isActive: true },
+    select: { questions: true, name: true },
+  });
+
+  if (!section) {
+    return reply.status(404).send({
+      success: false,
+      message: "القسم غير موجود",
+    });
+  }
+
+  // ✅ نرسل الأسئلة كاملة (مع correctIndex و explanation)
+  // الحماية الحقيقية هي أن هذا الـ Route محمي بـ JWT ولا يصل إليه إلا المسجلون
+  return reply.send({
+    success: true,
+    sectionName: section.name,
+    questions: section.questions || [],
+  });
+}
+
+// ========================================
+// 🔐 جديد: تصحيح الإجابة في السيرفر (يحتاج JWT)
+// ========================================
+export async function checkAnswer(
+  request: FastifyRequest,
+  reply: FastifyReply
+) {
+  const { id } = request.params as { id: string };
+  const { questionId, selectedIndex } = request.body as {
+    questionId: number;
+    selectedIndex: number;
+  };
+
+  const sectionId = Number(id);
+  if (isNaN(sectionId) || typeof questionId !== "number" || typeof selectedIndex !== "number") {
+    return reply.status(400).send({
+      success: false,
+      message: "بيانات غير صحيحة",
+    });
+  }
+
+  const section = await request.server.prisma.section.findUnique({
+    where: { id: sectionId },
+    select: { questions: true },
+  });
+
+  if (!section) {
+    return reply.status(404).send({
+      success: false,
+      message: "القسم غير موجود",
+    });
+  }
+
+  const question = (section.questions as Question[]).find(
+    (q) => q.id === questionId
+  );
+  if (!question) {
+    return reply.status(404).send({
+      success: false,
+      message: "السؤال غير موجود",
+    });
+  }
+
+  const correct = selectedIndex === question.correctIndex;
+
+  return reply.send({
+    success: true,
+    correct,
+    correctIndex: question.correctIndex,
+    explanation: question.explanation || "",
   });
 }
 

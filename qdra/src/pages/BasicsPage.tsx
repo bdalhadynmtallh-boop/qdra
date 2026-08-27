@@ -16,6 +16,8 @@ import {
   HelpCircle,
   XCircle,
   Table as TableIcon,
+  Download,
+  Eye,
 } from "lucide-react";
 import { cn } from "../utils/cn";
 import { useAuth } from "../context/AuthContext";
@@ -4007,16 +4009,33 @@ export default function BasicsPage() {
 
           </div>
 
-          <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* زر عرض الكتاب */}
+            <a
+              href="/book.pdf"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="press flex items-center gap-1.5 rounded-xl border border-gold-500/40 bg-gold-500/20 px-3 py-1.5 text-xs font-extrabold text-gold-300 hover:bg-gold-500/30"
+            >
+              <Eye size={14} />
+              عرض الكتاب
+            </a>
 
-            <span className="font-medium text-ink-300">
-              الإنجاز:
-            </span>
+            {/* زر تحميل الكتاب */}
+            <a
+              href="/book.pdf"
+              download="كتاب التأسيس في القدرات اللفظية.pdf"
+              className="press flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/20 px-3 py-1.5 text-xs font-extrabold text-emerald-300 hover:bg-emerald-500/30"
+            >
+              <Download size={14} />
+              تحميل الكتاب
+            </a>
 
-            <span className="font-extrabold text-gold-300">
-              {completionPercentage}%
-            </span>
-
+            {/* شارة الإنجاز */}
+            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs">
+              <span className="font-medium text-ink-300">الإنجاز:</span>
+              <span className="font-extrabold text-gold-300">{completionPercentage}%</span>
+            </div>
           </div>
 
         </div>

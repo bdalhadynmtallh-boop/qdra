@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Play,
   Sparkles,
@@ -12,15 +12,19 @@ import {
   ArrowRight,
   Settings2,
   BarChart3,
+  LayoutGrid,
+  Loader2,
 } from "lucide-react";
 
 import { sectionsMeta } from "../data/sectionsMeta";
-import { getSectionQuestions } from "../data/loadSections";
+import { loadSectionQuestions } from "../data/loadSections";
 import QuestionView from "../components/QuestionView";
 import QuizTimer from "../components/QuizTimer";
 import { useAppData } from "../context/AppDataContext";
 import { submitSimulatorAttempt } from "../auth/api";
 import { cn } from "../utils/cn";
+
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 function formatDuration(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
@@ -48,6 +52,17 @@ interface UserAnswer {
   correctAnswer: number;
 }
 
+interface SectionMeta {
+  id: number;
+  fileId: string;
+  name: string;
+  category: string;
+  type: string;
+  description: string;
+  order: number;
+  questionCount: number;
+}
+
 export default function SimulatorPage() {
   const {
     toggleFavorite,
@@ -67,11 +82,16 @@ export default function SimulatorPage() {
   const [customTime, setCustomTime] = useState<string>("");
   const [isCustomTime, setIsCustomTime] = useState(false);
 
+  const [isCustomSections, setIsCustomSections] = useState(false);
+  const [sectionFrom, setSectionFrom] = useState<string>("1");
+  const [sectionTo, setSectionTo] = useState<string>("256");
+
   // =========================================================
   // حالة الاختبار
   // =========================================================
 
   const [isStarted, setIsStarted] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [quizQuestions, setQuizQuestions] = useState<any[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [finished, setFinished] = useState(false);
@@ -88,6 +108,57 @@ export default function SimulatorPage() {
   const [userAnswers, setUserAnswers] = useState<(UserAnswer | null)[]>([]);
 
   // =========================================================
+  // ✅ جديد: جلب metadata من السيرفر (لحساب عدد الأسئلة المتوفرة)
+  // =========================================================
+
+  const [serverSections, setServerSections] = useState<SectionMeta[]>([]);
+  const [metadataLoading, setMetadataLoading] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchMetadata() {
+      try {
+        const res = await fetch(`${API_BASE}/api/sections`, {
+          credentials: "include",
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && data.success && Array.isArray(data.sections)) {
+            setServerSections(data.sections);
+          }
+        }
+      } catch (err) {
+        console.error("فشل جلب metadata الأقسام:", err);
+      } finally {
+        if (isMounted) setMetadataLoading(false);
+      }
+    }
+    fetchMetadata();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // =========================================================
+  // حساب الأسئلة المتوفرة ضمن النطاق المحدد (من metadata فقط)
+  // =========================================================
+
+  const availableCount = useMemo(() => {
+    const from = parseInt(sectionFrom, 10);
+    const to = parseInt(sectionTo, 10);
+    const rangeFrom = isCustomSections ? (!isNaN(from) && from > 0 ? from : 1) : 1;
+    const rangeTo = isCustomSections
+      ? !isNaN(to) && to > 0
+        ? to
+        : sectionsMeta.length
+      : sectionsMeta.length;
+
+    return serverSections
+      .filter((s) => s.id >= rangeFrom && s.id <= rangeTo)
+      .reduce((sum, s) => sum + (s.questionCount || 0), 0);
+  }, [serverSections, isCustomSections, sectionFrom, sectionTo]);
+
+  // =========================================================
   // Refs
   // =========================================================
 
@@ -95,60 +166,62 @@ export default function SimulatorPage() {
   const finishHandledRef = useRef(false);
 
   // =========================================================
-  // جلب جميع الأسئلة
+  // بدء محاكي جديد (async — يجلب الأسئلة من API)
   // =========================================================
 
-  const allQuestions = useMemo(() => {
-    const list: any[] = [];
+  const startSimulator = async () => {
+    if (availableCount === 0) return;
 
-    sectionsMeta.forEach((meta) => {
-      const qList = getSectionQuestions(meta.id);
+    setIsStarting(true);
 
-      if (Array.isArray(qList)) {
-        qList.forEach((q) => {
-          if (q && (q.text || q.question || q.title)) {
-            list.push({
-              ...q,
-              sectionId: meta.id,
-              sectionTitle: meta.title,
-            });
-          }
-        });
+    let finalCount = questionCount;
+    if (isCustomQuestions) {
+      const parsed = parseInt(customQuestions, 10);
+      finalCount = !isNaN(parsed) && parsed > 0 ? parsed : 10;
+    }
+
+    const from = parseInt(sectionFrom, 10);
+    const to = parseInt(sectionTo, 10);
+    const rangeFrom = isCustomSections ? (!isNaN(from) && from > 0 ? from : 1) : 1;
+    const rangeTo = isCustomSections
+      ? !isNaN(to) && to > 0
+        ? to
+        : sectionsMeta.length
+      : sectionsMeta.length;
+
+    // ✅ جلب الأسئلة من السيرفر لكل قسم في النطاق
+    const allQuestions: any[] = [];
+    const sectionIdsInRange = sectionsMeta
+      .filter((meta) => meta.id >= rangeFrom && meta.id <= rangeTo)
+      .map((m) => m.id);
+
+    for (const sectionId of sectionIdsInRange) {
+      try {
+        const questions = await loadSectionQuestions(sectionId);
+        if (Array.isArray(questions) && questions.length > 0) {
+          const meta = sectionsMeta.find((m) => m.id === sectionId);
+          questions.forEach((q) => {
+            if (q && (q.text || q.question || q.title)) {
+              allQuestions.push({
+                ...q,
+                sectionId,
+                sectionTitle: meta?.name || `القسم ${sectionId}`,
+              });
+            }
+          });
+        }
+      } catch (err) {
+        console.warn(`تجاوز القسم ${sectionId} (تعذر جلب الأسئلة)`);
       }
-    });
+    }
 
-    return list;
-  }, []);
-
-  // =========================================================
-  // بدء محاكي جديد
-  // =========================================================
-
-  const startSimulator = () => {
     if (allQuestions.length === 0) {
+      setIsStarting(false);
       return;
     }
 
-    let finalCount = questionCount;
-
-    if (isCustomQuestions) {
-      const parsed = parseInt(customQuestions, 10);
-
-      finalCount =
-        !isNaN(parsed) && parsed > 0
-          ? parsed
-          : 10;
-    }
-
-    const shuffled = [...allQuestions].sort(
-      () => 0.5 - Math.random()
-    );
-
-    const limit = Math.min(
-      finalCount,
-      shuffled.length
-    );
-
+    const shuffled = [...allQuestions].sort(() => 0.5 - Math.random());
+    const limit = Math.min(finalCount, shuffled.length);
     const selected = shuffled.slice(0, limit);
 
     const emptyAnswers = new Array(selected.length).fill(null);
@@ -159,20 +232,12 @@ export default function SimulatorPage() {
 
     setCurrentIndex(0);
     setFinished(false);
-
-    setRunStats({
-      correct: 0,
-      wrong: 0,
-      timeMs: 0,
-    });
-
+    setRunStats({ correct: 0, wrong: 0, timeMs: 0 });
     setCategoryStats([]);
-
     setStartedAt(Date.now());
-
     finishHandledRef.current = false;
-
     setIsStarted(true);
+    setIsStarting(false);
   };
 
   // =========================================================
@@ -180,23 +245,12 @@ export default function SimulatorPage() {
   // =========================================================
 
   const effectiveTimeLimit = useMemo(() => {
-    if (!isCustomTime) {
-      return timeLimitMinutes;
-    }
-
+    if (!isCustomTime) return timeLimitMinutes;
     const parsed = parseInt(customTime, 10);
+    return !isNaN(parsed) && parsed > 0 ? parsed : null;
+  }, [isCustomTime, customTime, timeLimitMinutes]);
 
-    return !isNaN(parsed) && parsed > 0
-      ? parsed
-      : null;
-  }, [
-    isCustomTime,
-    customTime,
-    timeLimitMinutes,
-  ]);
-
-  const currentQuestion =
-    quizQuestions[currentIndex];
+  const currentQuestion = quizQuestions[currentIndex];
 
   // =========================================================
   // تسجيل إجابة السؤال الحالي
@@ -208,9 +262,7 @@ export default function SimulatorPage() {
     correct: boolean,
     timeMs: number
   ) => {
-    if (!currentQuestion) {
-      return;
-    }
+    if (!currentQuestion) return;
 
     const answer: UserAnswer = {
       question: currentQuestion,
@@ -220,19 +272,14 @@ export default function SimulatorPage() {
       correctAnswer,
     };
 
-    const updated = [
-      ...userAnswersRef.current,
-    ];
-
+    const updated = [...userAnswersRef.current];
     updated[currentIndex] = answer;
-
     userAnswersRef.current = updated;
-
     setUserAnswers(updated);
   };
 
   // =========================================================
-  // الانتقال لأي سؤال مباشرة (جديد)
+  // الانتقال لأي سؤال مباشرة
   // =========================================================
 
   const jumpToQuestion = (index: number) => {
@@ -242,7 +289,7 @@ export default function SimulatorPage() {
   };
 
   // =========================================================
-  // حساب الأسئلة المحلولة في الجلسة الحالية (جديد)
+  // حساب الأسئلة المحلولة في الجلسة الحالية
   // =========================================================
 
   const answeredIndices = useMemo(() => {
@@ -256,43 +303,24 @@ export default function SimulatorPage() {
   // =========================================================
 
   const finishQuiz = () => {
-    if (finishHandledRef.current) {
-      return;
-    }
-
+    if (finishHandledRef.current) return;
     finishHandledRef.current = true;
 
-    const totalTime =
-      Date.now() - startedAt;
-
+    const totalTime = Date.now() - startedAt;
     let correctCount = 0;
     let wrongCount = 0;
 
-    const catMap: Record<
-      string,
-      {
-        correct: number;
-        total: number;
-      }
-    > = {};
-
+    const catMap: Record<string, { correct: number; total: number }> = {};
     const answers = userAnswersRef.current;
 
     answers.forEach((item) => {
-      if (!item) {
-        return;
-      }
+      if (!item) return;
 
       const categoryName =
-        item.question.category ||
-        item.question.sectionTitle ||
-        "عام";
+        item.question.category || item.question.sectionTitle || "عام";
 
       if (!catMap[categoryName]) {
-        catMap[categoryName] = {
-          correct: 0,
-          total: 0,
-        };
+        catMap[categoryName] = { correct: 0, total: 0 };
       }
 
       catMap[categoryName].total += 1;
@@ -314,21 +342,18 @@ export default function SimulatorPage() {
       );
     });
 
-    const catStatsArray: CategoryStat[] =
-      Object.keys(catMap).map((cat) => ({
-        categoryName: cat,
-        correct: catMap[cat].correct,
-        total: catMap[cat].total,
-      }));
+    const catStatsArray: CategoryStat[] = Object.keys(catMap).map((cat) => ({
+      categoryName: cat,
+      correct: catMap[cat].correct,
+      total: catMap[cat].total,
+    }));
 
     setRunStats({
       correct: correctCount,
       wrong: wrongCount,
       timeMs: totalTime,
     });
-
     setCategoryStats(catStatsArray);
-
     setFinished(true);
 
     submitSimulatorAttempt({
@@ -337,21 +362,12 @@ export default function SimulatorPage() {
       wrongAnswers: wrongCount,
       score:
         quizQuestions.length > 0
-          ? Math.round(
-              (correctCount /
-                quizQuestions.length) *
-                100
-            )
+          ? Math.round((correctCount / quizQuestions.length) * 100)
           : 0,
-      startedAt: new Date(
-        startedAt
-      ).toISOString(),
+      startedAt: new Date(startedAt).toISOString(),
       completedAt: new Date().toISOString(),
     }).catch((err) => {
-      console.error(
-        "فشل حفظ نتيجة المحاكي:",
-        err
-      );
+      console.error("فشل حفظ نتيجة المحاكي:", err);
     });
   };
 
@@ -360,17 +376,30 @@ export default function SimulatorPage() {
   // =========================================================
 
   const goNext = () => {
-    if (
-      currentIndex + 1 >=
-      quizQuestions.length
-    ) {
+    if (currentIndex + 1 >= quizQuestions.length) {
       finishQuiz();
     } else {
-      setCurrentIndex(
-        (i) => i + 1
-      );
+      setCurrentIndex((i) => i + 1);
     }
   };
+
+  // =========================================================
+  // شاشة التحميل عند بدء المحاكي
+  // =========================================================
+
+  if (isStarting) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
+        <Loader2 size={36} className="animate-spin text-gold-400" />
+        <div>
+          <p className="text-sm font-bold text-ink-50">جاري تحضير الاختبار...</p>
+          <p className="mt-1 text-xs text-ink-400">
+            يتم جلب الأسئلة من السيرفر الآمن
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // =========================================================
   // شاشة الإعدادات
@@ -394,56 +423,104 @@ export default function SimulatorPage() {
         </div>
 
         <div className="glass-card flex flex-col gap-6 rounded-3xl p-6">
+          {/* نطاق الأقسام */}
+          <div>
+            <label className="mb-2 flex items-center gap-2 text-sm font-bold text-ink-100">
+              <LayoutGrid size={18} className="text-gold-400" />
+              نطاق الأقسام
+            </label>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setIsCustomSections(false)}
+                className={cn(
+                  "press rounded-xl border py-2.5 text-xs font-bold transition-colors",
+                  !isCustomSections
+                    ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
+                    : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
+                )}
+              >
+                من كل الأقسام
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsCustomSections(true)}
+                className={cn(
+                  "press flex items-center justify-center gap-1 rounded-xl border py-2.5 text-xs font-bold transition-colors",
+                  isCustomSections
+                    ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
+                    : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
+                )}
+              >
+                <Settings2 size={13} />
+                تخصيص
+              </button>
+            </div>
+
+            {isCustomSections && (
+              <div className="mt-3 grid animate-pop-in grid-cols-2 gap-3">
+                <input
+                  type="number"
+                  min="1"
+                  max={sectionsMeta.length}
+                  value={sectionFrom}
+                  onChange={(e) => setSectionFrom(e.target.value)}
+                  placeholder="من القسم (مثال: 10)"
+                  className="w-full rounded-xl border border-gold-500/30 bg-ink-900/80 px-4 py-2.5 text-sm text-ink-50 outline-none focus:border-gold-400"
+                />
+
+                <input
+                  type="number"
+                  min="1"
+                  max={sectionsMeta.length}
+                  value={sectionTo}
+                  onChange={(e) => setSectionTo(e.target.value)}
+                  placeholder="إلى القسم (مثال: 20)"
+                  className="w-full rounded-xl border border-gold-500/30 bg-ink-900/80 px-4 py-2.5 text-sm text-ink-50 outline-none focus:border-gold-400"
+                />
+              </div>
+            )}
+          </div>
+
           <div>
             <label className="mb-2 flex items-center justify-between text-sm font-bold text-ink-100">
               <span className="flex items-center gap-2">
-                <HelpCircle
-                  size={18}
-                  className="text-gold-400"
-                />
+                <HelpCircle size={18} className="text-gold-400" />
                 عدد الأسئلة
               </span>
 
               <span className="text-xs font-normal text-ink-400">
-                (المتوفر: {allQuestions.length})
+                {metadataLoading
+                  ? "جاري الحساب..."
+                  : `(المتوفر: ${availableCount})`}
               </span>
             </label>
 
             <div className="grid grid-cols-5 gap-2">
-              {[10, 20, 30, 50].map(
-                (count) => (
-                  <button
-                    key={count}
-                    type="button"
-                    onClick={() => {
-                      setQuestionCount(
-                        count
-                      );
-                      setIsCustomQuestions(
-                        false
-                      );
-                    }}
-                    className={cn(
-                      "press rounded-xl border py-2.5 text-xs font-bold transition-colors",
-                      !isCustomQuestions &&
-                        questionCount ===
-                          count
-                        ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
-                        : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
-                    )}
-                  >
-                    {count}
-                  </button>
-                )
-              )}
+              {[10, 20, 30, 50].map((count) => (
+                <button
+                  key={count}
+                  type="button"
+                  onClick={() => {
+                    setQuestionCount(count);
+                    setIsCustomQuestions(false);
+                  }}
+                  className={cn(
+                    "press rounded-xl border py-2.5 text-xs font-bold transition-colors",
+                    !isCustomQuestions && questionCount === count
+                      ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
+                      : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
+                  )}
+                >
+                  {count}
+                </button>
+              ))}
 
               <button
                 type="button"
-                onClick={() =>
-                  setIsCustomQuestions(
-                    true
-                  )
-                }
+                onClick={() => setIsCustomQuestions(true)}
                 className={cn(
                   "press flex items-center justify-center gap-1 rounded-xl border py-2.5 text-xs font-bold transition-colors",
                   isCustomQuestions
@@ -461,15 +538,9 @@ export default function SimulatorPage() {
                 <input
                   type="number"
                   min="1"
-                  max={allQuestions.length}
-                  value={
-                    customQuestions
-                  }
-                  onChange={(e) =>
-                    setCustomQuestions(
-                      e.target.value
-                    )
-                  }
+                  max={availableCount || 1000}
+                  value={customQuestions}
+                  onChange={(e) => setCustomQuestions(e.target.value)}
                   placeholder="أدخل عدد الأسئلة (مثال: 15)"
                   className="w-full rounded-xl border border-gold-500/30 bg-ink-900/80 px-4 py-2.5 text-sm text-ink-50 outline-none focus:border-gold-400"
                 />
@@ -479,48 +550,27 @@ export default function SimulatorPage() {
 
           <div>
             <label className="mb-2 flex items-center gap-2 text-sm font-bold text-ink-100">
-              <Clock
-                size={18}
-                className="text-gold-400"
-              />
+              <Clock size={18} className="text-gold-400" />
               المدة الزمنية
             </label>
 
             <div className="grid grid-cols-5 gap-2">
               {[
-                {
-                  label: "5 د",
-                  value: 5,
-                },
-                {
-                  label: "15 د",
-                  value: 15,
-                },
-                {
-                  label: "30 د",
-                  value: 30,
-                },
-                {
-                  label: "بدون",
-                  value: null,
-                },
+                { label: "5 د", value: 5 },
+                { label: "15 د", value: 15 },
+                { label: "30 د", value: 30 },
+                { label: "بدون", value: null },
               ].map((opt) => (
                 <button
                   key={opt.label}
                   type="button"
                   onClick={() => {
-                    setTimeLimitMinutes(
-                      opt.value
-                    );
-                    setIsCustomTime(
-                      false
-                    );
+                    setTimeLimitMinutes(opt.value);
+                    setIsCustomTime(false);
                   }}
                   className={cn(
                     "press rounded-xl border py-2.5 text-xs font-bold transition-colors",
-                    !isCustomTime &&
-                      timeLimitMinutes ===
-                        opt.value
+                    !isCustomTime && timeLimitMinutes === opt.value
                       ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
                       : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
                   )}
@@ -531,11 +581,7 @@ export default function SimulatorPage() {
 
               <button
                 type="button"
-                onClick={() =>
-                  setIsCustomTime(
-                    true
-                  )
-                }
+                onClick={() => setIsCustomTime(true)}
                 className={cn(
                   "press flex items-center justify-center gap-1 rounded-xl border py-2.5 text-xs font-bold transition-colors",
                   isCustomTime
@@ -554,11 +600,7 @@ export default function SimulatorPage() {
                   type="number"
                   min="1"
                   value={customTime}
-                  onChange={(e) =>
-                    setCustomTime(
-                      e.target.value
-                    )
-                  }
+                  onChange={(e) => setCustomTime(e.target.value)}
                   placeholder="أدخل الوقت بالدقائق (مثال: 10)"
                   className="w-full rounded-xl border border-gold-500/30 bg-ink-900/80 px-4 py-2.5 text-sm text-ink-50 outline-none focus:border-gold-400"
                 />
@@ -567,20 +609,23 @@ export default function SimulatorPage() {
           </div>
 
           <button
-            onClick={
-              startSimulator
-            }
-            disabled={
-              allQuestions.length === 0
-            }
+            onClick={startSimulator}
+            disabled={availableCount === 0 || metadataLoading}
             className="btn-gold press mt-2 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-base font-bold disabled:opacity-50"
           >
             <Play size={20} />
-
-            {allQuestions.length === 0
-              ? "لا توجد أسئلة متوفرة"
-              : "بدء الاختبار المحاكي"}
+            {metadataLoading
+              ? "جاري التحميل..."
+              : availableCount === 0
+                ? "لا توجد أسئلة متوفرة"
+                : "بدء الاختبار المحاكي"}
           </button>
+
+          {availableCount === 0 && !metadataLoading && (
+            <p className="text-center text-[11px] leading-6 text-ink-400">
+              تأكد من تسجيل الدخول وأن اشتراكك فعّال للوصول إلى الأسئلة.
+            </p>
+          )}
         </div>
       </div>
     );
@@ -591,17 +636,8 @@ export default function SimulatorPage() {
   // =========================================================
 
   if (finished) {
-    const total =
-      quizQuestions.length;
-
-    const percent =
-      total > 0
-        ? Math.round(
-            (runStats.correct /
-              total) *
-              100
-          )
-        : 0;
+    const total = quizQuestions.length;
+    const percent = total > 0 ? Math.round((runStats.correct / total) * 100) : 0;
 
     return (
       <div className="animate-pop-in mx-auto flex max-w-xl flex-col items-center gap-6 py-8 text-center">
@@ -610,76 +646,35 @@ export default function SimulatorPage() {
         </span>
 
         <div>
-          <h1 className="text-2xl font-extrabold text-ink-50">
-            أنجزت أداءً رائعاً!
-          </h1>
-
-          <p className="mt-2 text-sm text-ink-300">
-            ملخص أدائك في المحاكي الشامل
-          </p>
+          <h1 className="text-2xl font-extrabold text-ink-50">أنجزت أداءً رائعاً!</h1>
+          <p className="mt-2 text-sm text-ink-300">ملخص أدائك في المحاكي الشامل</p>
         </div>
 
         <div className="glass-card grid w-full grid-cols-2 gap-4 rounded-3xl p-6 md:grid-cols-4">
           <div className="flex flex-col items-center gap-1">
-            <Percent
-              className="text-gold-400"
-              size={20}
-            />
-
-            <span className="text-xl font-extrabold text-ink-50">
-              {percent}%
-            </span>
-
-            <span className="text-xs text-ink-400">
-              النسبة المئوية
-            </span>
+            <Percent className="text-gold-400" size={20} />
+            <span className="text-xl font-extrabold text-ink-50">{percent}%</span>
+            <span className="text-xs text-ink-400">النسبة المئوية</span>
           </div>
 
           <div className="flex flex-col items-center gap-1">
-            <CheckCircle2
-              className="text-emerald-400"
-              size={20}
-            />
-
-            <span className="text-xl font-extrabold text-ink-50">
-              {runStats.correct}
-            </span>
-
-            <span className="text-xs text-ink-400">
-              إجابات صحيحة
-            </span>
+            <CheckCircle2 className="text-emerald-400" size={20} />
+            <span className="text-xl font-extrabold text-ink-50">{runStats.correct}</span>
+            <span className="text-xs text-ink-400">إجابات صحيحة</span>
           </div>
 
           <div className="flex flex-col items-center gap-1">
-            <XCircle
-              className="text-red-400"
-              size={20}
-            />
-
-            <span className="text-xl font-extrabold text-ink-50">
-              {runStats.wrong}
-            </span>
-
-            <span className="text-xs text-ink-400">
-              إجابات خاطئة
-            </span>
+            <XCircle className="text-red-400" size={20} />
+            <span className="text-xl font-extrabold text-ink-50">{runStats.wrong}</span>
+            <span className="text-xs text-ink-400">إجابات خاطئة</span>
           </div>
 
           <div className="flex flex-col items-center gap-1">
-            <Clock
-              className="text-gold-400"
-              size={20}
-            />
-
+            <Clock className="text-gold-400" size={20} />
             <span className="text-xl font-extrabold text-ink-50">
-              {formatDuration(
-                runStats.timeMs
-              )}
+              {formatDuration(runStats.timeMs)}
             </span>
-
-            <span className="text-xs text-ink-400">
-              الوقت المستغرق
-            </span>
+            <span className="text-xs text-ink-400">الوقت المستغرق</span>
           </div>
         </div>
 
@@ -687,61 +682,41 @@ export default function SimulatorPage() {
           <div className="glass-card flex w-full flex-col gap-3 rounded-3xl p-6 text-right">
             <div className="mb-2 flex items-center gap-2 text-sm font-bold text-gold-300">
               <BarChart3 size={18} />
-              <span>
-                الأداء حسب الموضوع:
-              </span>
+              <span>الأداء حسب الموضوع:</span>
             </div>
 
             <div className="flex flex-col gap-3">
-              {categoryStats.map(
-                (cat, idx) => {
-                  const catPercent =
-                    Math.round(
-                      (cat.correct /
-                        cat.total) *
-                        100
-                    );
+              {categoryStats.map((cat, idx) => {
+                const catPercent = Math.round((cat.correct / cat.total) * 100);
 
-                  return (
-                    <div
-                      key={idx}
-                      className="flex flex-col gap-1.5 rounded-2xl border border-white/5 bg-white/5 p-3.5"
-                    >
-                      <div className="flex items-center justify-between text-xs font-bold">
-                        <span className="text-ink-50">
-                          {
-                            cat.categoryName
-                          }
-                        </span>
-
-                        <span className="text-gold-400">
-                          {cat.correct} من{" "}
-                          {cat.total} (
-                          {catPercent}%)
-                        </span>
-                      </div>
-
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-black/30">
-                        <div
-                          className="h-full rounded-full bg-gradient-to-l from-gold-300 to-gold-500 transition-all duration-500"
-                          style={{
-                            width: `${catPercent}%`,
-                          }}
-                        />
-                      </div>
+                return (
+                  <div
+                    key={idx}
+                    className="flex flex-col gap-1.5 rounded-2xl border border-white/5 bg-white/5 p-3.5"
+                  >
+                    <div className="flex items-center justify-between text-xs font-bold">
+                      <span className="text-ink-50">{cat.categoryName}</span>
+                      <span className="text-gold-400">
+                        {cat.correct} من {cat.total} ({catPercent}%)
+                      </span>
                     </div>
-                  );
-                }
-              )}
+
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-black/30">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-l from-gold-300 to-gold-500 transition-all duration-500"
+                        style={{ width: `${catPercent}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
 
         <div className="flex flex-wrap items-center justify-center gap-3">
           <button
-            onClick={
-              startSimulator
-            }
+            onClick={startSimulator}
             className="btn-gold press flex items-center gap-2 rounded-2xl px-6 py-3 text-sm"
           >
             <RotateCcw size={16} />
@@ -749,9 +724,7 @@ export default function SimulatorPage() {
           </button>
 
           <button
-            onClick={() =>
-              setIsStarted(false)
-            }
+            onClick={() => setIsStarted(false)}
             className="press flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-6 py-3 text-sm font-bold text-ink-100 hover:bg-white/10"
           >
             تغيير الإعدادات
@@ -762,7 +735,7 @@ export default function SimulatorPage() {
   }
 
   // =========================================================
-  // داخل الاختبار — مع شبكة التنقل والمؤقت داخل البطاقة
+  // داخل الاختبار — المؤقت خارج QuestionView عشان ما يتصفّر
   // =========================================================
 
   return (
@@ -783,50 +756,31 @@ export default function SimulatorPage() {
         </span>
       </div>
 
+      {effectiveTimeLimit !== null && (
+        <QuizTimer
+          key={`simulator-${startedAt}`}
+          durationInSeconds={effectiveTimeLimit * 60}
+          onExpire={finishQuiz}
+        />
+      )}
+
       {currentQuestion ? (
         <QuestionView
           key={`${currentQuestion.sectionId}-${currentQuestion.id}-${currentIndex}`}
           question={currentQuestion}
-          questionNumber={
-            currentIndex + 1
-          }
-          totalQuestions={
-            quizQuestions.length
-          }
-          isFavorite={isFavorite(
-            currentQuestion.sectionId,
-            currentQuestion.id
-          )}
+          questionNumber={currentIndex + 1}
+          totalQuestions={quizQuestions.length}
+          isFavorite={isFavorite(currentQuestion.sectionId, currentQuestion.id)}
           onToggleFavorite={() =>
-            toggleFavorite(
-              currentQuestion.sectionId,
-              currentQuestion.id
-            )
+            toggleFavorite(currentQuestion.sectionId, currentQuestion.id)
           }
-          onAnswered={
-            handleAnswered
-          }
+          onAnswered={handleAnswered}
           onNext={goNext}
           answeredIndices={answeredIndices}
           onJumpToQuestion={jumpToQuestion}
-          headerSlot={
-            effectiveTimeLimit !== null ? (
-              <QuizTimer
-                key={`simulator-${startedAt}`}
-                durationInSeconds={
-                  effectiveTimeLimit * 60
-                }
-                onExpire={
-                  finishQuiz
-                }
-              />
-            ) : undefined
-          }
         />
       ) : (
-        <div className="py-10 text-center text-ink-300">
-          جاري تحميل السؤال...
-        </div>
+        <div className="py-10 text-center text-ink-300">جاري تحميل السؤال...</div>
       )}
     </div>
   );
