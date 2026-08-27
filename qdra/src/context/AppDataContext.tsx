@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, useRef, type ReactNode } from "react";
 import type { AppState, SectionProgress } from "../types";
 import { getSectionMetaById } from "../data/sectionsMeta";
 import { getSectionQuestionCount } from "../data/loadSections";
@@ -53,9 +53,34 @@ function sameItem(a: { sectionId: number; questionId: number }, b: { sectionId: 
 export function AppDataProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
 
-  const [state, setState] = useState<AppState>(createEmptyState());
+  // ✅ الحالة البدائية: اقرأ من localStorage فوراً لو عندنا user.id
+  const [state, setState] = useState<AppState>(() => {
+    try {
+      if (typeof window !== "undefined" && user?.id) {
+        const key = `${LOCAL_STORAGE_KEY}_${user.id}`;
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const backup = JSON.parse(raw) as AppState;
+          return {
+            progress: backup.progress || {},
+            mistakes: backup.mistakes || [],
+            favorites: backup.favorites || [],
+            lastVisited: backup.lastVisited,
+            totals: backup.totals || createEmptyState().totals,
+            streakData: backup.streakData || createEmptyState().streakData,
+          };
+        }
+      }
+    } catch {
+      // تجاهل
+    }
+    return createEmptyState();
+  });
 
-  // ✅ استعادة فورية من النسخة الاحتياطية (يمنع طيران البيانات مع التحديث)
+  // ✅ عشان نتأكد ما نكرّر تحميل من السيرفر
+  const hasSyncedRef = useRef(false);
+
+  // ✅ استعادة فورية إذا user.id تغير (مثلاً عند تسجيل الدخول)
   useEffect(() => {
     if (!user?.id) return;
     try {
@@ -63,29 +88,37 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       const raw = localStorage.getItem(key);
       if (raw) {
         const backup = JSON.parse(raw) as AppState;
-        setState({
-          progress: backup.progress || {},
-          mistakes: backup.mistakes || [],
-          favorites: backup.favorites || [],
-          lastVisited: backup.lastVisited,
-          totals: backup.totals || createEmptyState().totals,
-          streakData: backup.streakData || createEmptyState().streakData,
+        setState((prev) => {
+          // لا نكتب فوق البيانات الحالية إلا إذا كانت فاضية
+          if (Object.keys(prev.progress).length > 0) return prev;
+          return {
+            progress: backup.progress || {},
+            mistakes: backup.mistakes || [],
+            favorites: backup.favorites || [],
+            lastVisited: backup.lastVisited,
+            totals: backup.totals || createEmptyState().totals,
+            streakData: backup.streakData || createEmptyState().streakData,
+          };
         });
       }
     } catch {
-      // تجاهل أي خطأ بالكاش
+      // تجاهل
     }
   }, [user?.id]);
 
-  // حفظ في localStorage كنسخة احتياطية
+  // ✅ حفظ تلقائي في localStorage عند كل تغيير
   useEffect(() => {
     if (typeof window !== "undefined" && user?.id) {
       const key = `${LOCAL_STORAGE_KEY}_${user.id}`;
-      localStorage.setItem(key, JSON.stringify(state));
+      try {
+        localStorage.setItem(key, JSON.stringify(state));
+      } catch (e) {
+        console.warn("فشل حفظ الحالة:", e);
+      }
     }
   }, [state, user?.id]);
 
-  // المزامنة مع السيرفر (تحديث البيانات في الخلفية)
+  // ✅ sync مع السيرفر (في الخلفية — ما يمسح البيانات المحلية أبداً)
   useEffect(() => {
     let isMounted = true;
 
@@ -94,33 +127,66 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
       try {
         const data = await getUserUserData();
-        if (isMounted && data?.success) {
-          const serverData = data as any;
-          setState((prev) => {
-            // ⬇️ دمج ذكي: السيرفر + المحلي (نأخذ الأعلى)
-            const serverTotals = serverData.stats
-              ? {
-                  totalAnswered: (serverData.stats.correctAnswers || 0) + (serverData.stats.wrongAnswers || 0),
-                  totalCorrect: serverData.stats.correctAnswers || 0,
-                  totalWrong: serverData.stats.wrongAnswers || 0,
-                  totalTimeMs: (serverData.stats.totalStudyTimeSeconds || 0) * 1000,
-                }
-              : null;
+        if (!isMounted || !data?.success) return;
 
-            return {
-              progress: { ...prev.progress, ...(serverData.progress || {}) },
-              mistakes: serverData.mistakes?.length ? serverData.mistakes : prev.mistakes,
-              favorites: serverData.favorites?.length ? serverData.favorites : prev.favorites,
-              totals: serverTotals && serverTotals.totalAnswered >= prev.totals.totalAnswered
-                ? serverTotals
-                : prev.totals,
-              lastVisited: prev.lastVisited,
-              streakData: serverData.streakData || prev.streakData,
-            };
-          });
-        }
+        const serverData = data as any;
+        setState((prev) => {
+          const serverProgress = serverData.progress || {};
+          const serverMistakes = Array.isArray(serverData.mistakes) ? serverData.mistakes : [];
+          const serverFavorites = Array.isArray(serverData.favorites) ? serverData.favorites : [];
+
+          // ✅ دمج ذكي: نجمع progress المحلي مع السيرفر
+          const mergedProgress = { ...prev.progress };
+          for (const [key, value] of Object.entries(serverProgress)) {
+            if (!mergedProgress[key] && value) {
+              mergedProgress[key] = value as SectionProgress;
+            }
+          }
+
+          // ✅ دمج الأخطاء (union)
+          const mergedMistakes = [...prev.mistakes];
+          for (const m of serverMistakes) {
+            if (!mergedMistakes.some((x) => sameItem(x, m))) {
+              mergedMistakes.push(m);
+            }
+          }
+
+          // ✅ دمج المفضلة (union)
+          const mergedFavorites = [...prev.favorites];
+          for (const f of serverFavorites) {
+            if (!mergedFavorites.some((x) => sameItem(x, f))) {
+              mergedFavorites.push(f);
+            }
+          }
+
+          // ✅ الإحصائيات: نأخذ الأعلى بين المحلي والسيرفر
+          const serverTotals = serverData.stats
+            ? {
+                totalAnswered: (serverData.stats.correctAnswers || 0) + (serverData.stats.wrongAnswers || 0),
+                totalCorrect: serverData.stats.correctAnswers || 0,
+                totalWrong: serverData.stats.wrongAnswers || 0,
+                totalTimeMs: (serverData.stats.totalStudyTimeSeconds || 0) * 1000,
+              }
+            : null;
+
+          const finalTotals =
+            serverTotals && serverTotals.totalAnswered > prev.totals.totalAnswered
+              ? serverTotals
+              : prev.totals;
+
+          return {
+            progress: mergedProgress,
+            mistakes: mergedMistakes,
+            favorites: mergedFavorites,
+            totals: finalTotals,
+            lastVisited: prev.lastVisited,
+            streakData: serverData.streakData || prev.streakData,
+          };
+        });
+
+        hasSyncedRef.current = true;
       } catch (err) {
-        console.warn("⚠️ لم يتم الوصول للسيرفر:", err);
+        console.warn("⚠️ فشل المزامنة مع السيرفر — البيانات المحلية محفوظة:", err);
       }
     }
 
@@ -154,7 +220,14 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     return !!state.progress[sectionId]?.completed;
   };
 
-  const recordAnswer = (sectionId: number, questionId: number, selectedAnswer: number, correctAnswer: number, correct: boolean, timeMs: number) => {
+  const recordAnswer = (
+    sectionId: number,
+    questionId: number,
+    selectedAnswer: number,
+    correctAnswer: number,
+    correct: boolean,
+    timeMs: number
+  ) => {
     setState((prev) => {
       const current = prev.progress[sectionId] ?? { answeredIds: [], correctIds: [], completed: false };
       const answeredIds = current.answeredIds.includes(questionId)
