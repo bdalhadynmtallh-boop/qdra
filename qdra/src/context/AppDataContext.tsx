@@ -53,18 +53,39 @@ function sameItem(a: { sectionId: number; questionId: number }, b: { sectionId: 
 export function AppDataProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
 
-  // نبدأ بحالة فاضية، ونعتمد على السيرفر كمصدر وحيد
   const [state, setState] = useState<AppState>(createEmptyState());
 
-  // حفظ في localStorage كنسخة احتياطية فقط
+  // ✅ استعادة فورية من النسخة الاحتياطية (يمنع طيران البيانات مع التحديث)
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const key = `${LOCAL_STORAGE_KEY}_${user?.id || "guest"}`;
+    if (!user?.id) return;
+    try {
+      const key = `${LOCAL_STORAGE_KEY}_${user.id}`;
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const backup = JSON.parse(raw) as AppState;
+        setState({
+          progress: backup.progress || {},
+          mistakes: backup.mistakes || [],
+          favorites: backup.favorites || [],
+          lastVisited: backup.lastVisited,
+          totals: backup.totals || createEmptyState().totals,
+          streakData: backup.streakData || createEmptyState().streakData,
+        });
+      }
+    } catch {
+      // تجاهل أي خطأ بالكاش
+    }
+  }, [user?.id]);
+
+  // حفظ في localStorage كنسخة احتياطية
+  useEffect(() => {
+    if (typeof window !== "undefined" && user?.id) {
+      const key = `${LOCAL_STORAGE_KEY}_${user.id}`;
       localStorage.setItem(key, JSON.stringify(state));
     }
   }, [state, user?.id]);
 
-  // المزامنة مع السيرفر كمصدر وحيد للحقيقة
+  // المزامنة مع السيرفر (تحديث البيانات في الخلفية)
   useEffect(() => {
     let isMounted = true;
 
@@ -76,18 +97,22 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         if (isMounted && data?.success) {
           const serverData = data as any;
           setState((prev) => {
+            // ⬇️ دمج ذكي: السيرفر + المحلي (نأخذ الأعلى)
+            const serverTotals = serverData.stats
+              ? {
+                  totalAnswered: (serverData.stats.correctAnswers || 0) + (serverData.stats.wrongAnswers || 0),
+                  totalCorrect: serverData.stats.correctAnswers || 0,
+                  totalWrong: serverData.stats.wrongAnswers || 0,
+                  totalTimeMs: (serverData.stats.totalStudyTimeSeconds || 0) * 1000,
+                }
+              : null;
+
             return {
-              progress: serverData.progress || {},
-              mistakes: serverData.mistakes || [],
-              favorites: serverData.favorites || [],
-              totals: serverData.stats
-                ? {
-                    // ⬇️ جديد: نستخدم totalAttempts (مجموع المحاولات الحقيقية) بدل totalQuestions
-                    totalAnswered: (serverData.stats.correctAnswers || 0) + (serverData.stats.wrongAnswers || 0),
-                    totalCorrect: serverData.stats.correctAnswers || 0,
-                    totalWrong: serverData.stats.wrongAnswers || 0,
-                    totalTimeMs: (serverData.stats.totalStudyTimeSeconds || 0) * 1000,
-                  }
+              progress: { ...prev.progress, ...(serverData.progress || {}) },
+              mistakes: serverData.mistakes?.length ? serverData.mistakes : prev.mistakes,
+              favorites: serverData.favorites?.length ? serverData.favorites : prev.favorites,
+              totals: serverTotals && serverTotals.totalAnswered >= prev.totals.totalAnswered
+                ? serverTotals
                 : prev.totals,
               lastVisited: prev.lastVisited,
               streakData: serverData.streakData || prev.streakData,
@@ -100,8 +125,6 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     }
 
     syncWithBackend();
-
-    // مزامنة تلقائية كل 30 ثانية
     const interval = setInterval(syncWithBackend, 30000);
 
     return () => {

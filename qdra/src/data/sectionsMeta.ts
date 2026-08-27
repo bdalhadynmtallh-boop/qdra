@@ -1,6 +1,6 @@
 import type { SectionMeta } from "../types";
 
-export const TOTAL_SECTIONS = 300
+export const TOTAL_SECTIONS = 301
 
 function pad3(n: number) {
   return n.toString().padStart(3, "0");
