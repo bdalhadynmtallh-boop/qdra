@@ -1,5 +1,6 @@
 import "dotenv/config";
 import Fastify from "fastify";
+import type { FastifyError } from "fastify";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -22,7 +23,6 @@ import { pdfRoutes } from "./routes/pdfs.js";
 const app = Fastify({
   logger: {
     level: process.env.LOG_LEVEL || "info",
-    // ✅ إخفاء الحقول الحساسة من الـ logs
     redact: {
       paths: [
         "req.headers.authorization",
@@ -33,39 +33,31 @@ const app = Fastify({
       censor: "***REDACTED***",
     },
   },
-  // ✅ مهم لـ Render (proxy)
   trustProxy: true,
 });
 
 // ========================================
-// 🛡️ CORS - مقيد بدومينات موثوقة فقط
+// 🛡️ CORS
 // ========================================
 
 const ALLOWED_ORIGINS = [
-  // الإنتاج
   "https://qdra.vercel.app",
-  "https://qudrat.app", // إذا عندك دومين مخصص
-  // التطوير المحلي
+  "https://qudrat.app",
   "http://localhost:5173",
   "http://localhost:3000",
-  "http://localhost:4173", // vite preview
+  "http://localhost:4173",
 ];
 
 await app.register(cors, {
   origin: (origin, cb) => {
-    // السماح للطلبات بدون origin (تطبيقات الجوال / Postman / server-to-server)
     if (!origin) {
       cb(null, true);
       return;
     }
-
-    // في بيئة التطوير، نسمح بكل شي
     if (process.env.NODE_ENV !== "production") {
       cb(null, true);
       return;
     }
-
-    // في الإنتاج، نسمح فقط بالدومينات المعروفة
     if (ALLOWED_ORIGINS.includes(origin)) {
       cb(null, true);
     } else {
@@ -76,7 +68,6 @@ await app.register(cors, {
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  // ✅ Cache نتيجة preflight لمدة ساعة
   maxAge: 3600,
 });
 
@@ -85,14 +76,10 @@ await app.register(cors, {
 // ========================================
 
 await app.register(cookie, {
-  parseOptions: {
-    sameSite: "lax",
-    path: "/",
-  },
+  parseOptions: { sameSite: "lax", path: "/" },
 });
 
 await app.register(helmet, {
-  // ✅ السماح بتحميل الموارد من مصادر خارجية (fonts, CDN)
   crossOriginResourcePolicy: false,
   contentSecurityPolicy: {
     directives: {
@@ -102,56 +89,38 @@ await app.register(helmet, {
       imgSrc: ["'self'", "data:", "https:", "blob:"],
       scriptSrc: ["'self'", "'unsafe-inline'"],
       connectSrc: ["'self'", "https://qdra.vercel.app", "https://qdra-1.onrender.com"],
-      frameAncestors: ["'none'"], // منع clickjacking
+      frameAncestors: ["'none'"],
       upgradeInsecureRequests: [],
     },
   },
-  // ✅ إخفاء معلومات السيرفر
   hidePoweredBy: true,
-  // ✅ منع IE من فتح الموقع في سياق مختلف
   ieNoOpen: true,
-  // ✅ منع MIME sniffing
   noSniff: true,
-  // ✅ حماية من clickjacking
   frameguard: { action: "deny" },
-  // ✅ HSTS - إجبار HTTPS
-  hsts: {
-    maxAge: 31536000, // سنة
-    includeSubDomains: true,
-    preload: true,
-  },
-  // ✅ XSS Filter
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
   xssFilter: true,
-  // ✅ Referrer Policy
   referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-  // ✅ DNS Prefetch Control
   dnsPrefetchControl: { allow: false },
-  // ✅ Permitted Cross-Domain Policies
   permittedCrossDomainPolicies: { permittedPolicies: "none" },
 });
 
 // ========================================
-// 🛡️ Rate Limiting عام
+// 🛡️ Rate Limiting
 // ========================================
 
 await app.register(rateLimit, {
-  max: 100, // ✅ قلّلنا من 200 إلى 100
+  max: 100,
   timeWindow: "1 minute",
-  // ✅ اعتبار IP + User-Agent كمفتاح (أدق)
   keyGenerator: (request) => {
     const ip = request.ip || "unknown";
-    const ua = request.headers["user-agent"] || "unknown";
+    const ua = (request.headers["user-agent"] as string) || "unknown";
     return `${ip}:${ua.slice(0, 30)}`;
   },
-  // ✅ السماح بمزيد من الطلبات للصحة
   allowList: ["/api/health", "/api"],
-  // ✅ رسالة حظر واضحة
-  errorResponseBuilder: (request, context) => {
-    return {
-      success: false,
-      message: `تم تجاوز الحد المسموح — انتظر ${Math.ceil(context.ttl / 1000)} ثانية`,
-    };
-  },
+  errorResponseBuilder: (_request, context) => ({
+    success: false,
+    message: `تم تجاوز الحد المسموح — انتظر ${Math.ceil(context.ttl / 1000)} ثانية`,
+  }),
 });
 
 // ========================================
@@ -161,28 +130,6 @@ await app.register(rateLimit, {
 await app.register(prismaPlugin);
 await app.register(authPlugin);
 await app.register(adminPlugin);
-
-// ========================================
-// 🛡️ Rate Limit خاص بالمسارات الحساسة
-// ========================================
-
-const loginRateLimit = {
-  max: 5,
-  timeWindow: "15 minutes",
-  errorResponseBuilder: () => ({
-    success: false,
-    message: "محاولات كثيرة — انتظر 15 دقيقة",
-  }),
-};
-
-const renewRateLimit = {
-  max: 3,
-  timeWindow: "1 hour",
-  errorResponseBuilder: () => ({
-    success: false,
-    message: "محاولات تجديد كثيرة — انتظر ساعة",
-  }),
-};
 
 const sensitiveRateLimit = {
   max: 30,
@@ -197,38 +144,16 @@ const sensitiveRateLimit = {
 // 📡 Routes
 // ========================================
 
-await app.register(sectionRoutes, {
-  prefix: "/api",
-});
-
-// ✅ حماية خاصة لتسجيل الدخول
-await app.register(authRoutes, {
-  prefix: "/api/auth",
-});
-
+await app.register(sectionRoutes, { prefix: "/api" });
+await app.register(authRoutes, { prefix: "/api/auth" });
 await app.register(adminRoutes, {
   prefix: "/api/admin",
-  // ✅ Admin يحتاج rate limit أشد
-  config: {
-    rateLimit: sensitiveRateLimit,
-  },
+  config: { rateLimit: sensitiveRateLimit },
 });
-
-await app.register(progressRoutes, {
-  prefix: "/api/progress",
-});
-
-await app.register(simulatorRoutes, {
-  prefix: "/api/simulator",
-});
-
-await app.register(pdfRoutes, {
-  prefix: "/api",
-});
-
-await app.register(healthRoutes, {
-  prefix: "/api",
-});
+await app.register(progressRoutes, { prefix: "/api/progress" });
+await app.register(simulatorRoutes, { prefix: "/api/simulator" });
+await app.register(pdfRoutes, { prefix: "/api" });
+await app.register(healthRoutes, { prefix: "/api" });
 
 // ========================================
 // 🌐 Root Routes
@@ -247,17 +172,14 @@ app.get("/api", async () => ({
 }));
 
 // ========================================
-// 🛡️ Global Error Handler (يمنع تسريب المعلومات)
+// 🛡️ Global Error Handler (✅ مُصحح: FastifyError)
 // ========================================
 
-app.setErrorHandler((error, request, reply) => {
-  // ✅ تسجيل الخطأ داخلياً (للمطورين)
+app.setErrorHandler((error: FastifyError, request, reply) => {
   request.log.error(error);
 
-  // ✅ منع تسريب تفاصيل الخطأ للمستخدم
   const statusCode = error.statusCode || 500;
 
-  // أخطاء معروفة - أرسل الرسالة كما هي
   if (statusCode >= 400 && statusCode < 500) {
     return reply.status(statusCode).send({
       success: false,
@@ -265,7 +187,6 @@ app.setErrorHandler((error, request, reply) => {
     });
   }
 
-  // أخطاء السيرفر - رسالة عامة فقط
   return reply.status(500).send({
     success: false,
     message: "حدث خطأ غير متوقع، حاول مرة أخرى",
@@ -273,7 +194,7 @@ app.setErrorHandler((error, request, reply) => {
 });
 
 // ========================================
-// 🛡️ 404 Handler (يمنع تسريب المسارات)
+// 🛡️ 404 Handler
 // ========================================
 
 app.setNotFoundHandler((request, reply) => {
@@ -285,7 +206,7 @@ app.setNotFoundHandler((request, reply) => {
 });
 
 // ========================================
-// 🚀 Start Server
+// 🚀 Start Server (✅ مُصحح: unknown + Error)
 // ========================================
 
 const start = async () => {
@@ -298,14 +219,15 @@ const start = async () => {
     console.log(`🚀 RHAL Backend running on http://${host}:${port}`);
     console.log(`🛡️  Security: CORS restricted, Helmet enabled, Rate limiting active`);
     console.log(`📦 Environment: ${process.env.NODE_ENV || "development"}`);
-  } catch (error) {
-    app.log.error(error);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    app.log.error(`Failed to start server: ${message}`);
     process.exit(1);
   }
 };
 
 // ========================================
-// 🛡️ Graceful Shutdown
+// 🛡️ Graceful Shutdown (✅ مُصحح: unknown + Error)
 // ========================================
 
 const gracefulShutdown = async (signal: string) => {
@@ -314,8 +236,9 @@ const gracefulShutdown = async (signal: string) => {
     await app.close();
     console.log("✅ Server closed");
     process.exit(0);
-  } catch (err) {
-    console.error("❌ Error during shutdown:", err);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error(`❌ Error during shutdown: ${message}`);
     process.exit(1);
   }
 };
