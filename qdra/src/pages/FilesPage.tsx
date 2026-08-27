@@ -1,8 +1,38 @@
 import { useState, useMemo, useEffect } from "react";
 import { FileText, CheckCircle, Search, FolderOpen, AlertCircle, Loader2 } from "lucide-react";
+import { getStoredToken } from "../auth/api";
 
-// ⚙️ نفس رابط الباك اند اللي تستخدمه لوحة التحكم
-const API_BASE = import.meta.env.VITE_API_URL || "https://qdra-1.onrender.com";
+// ========================================
+// 🌐 منطق API URL الموحد (نفس api.ts)
+// ========================================
+const getApiUrl = () => {
+  if (typeof window !== "undefined") {
+    const hostname = window.location.hostname;
+    if (hostname.includes("vercel.app")) return "https://qdra-1.onrender.com";
+    if (hostname !== "localhost" && hostname !== "127.0.0.1") {
+      return `http://${hostname}:3000`;
+    }
+  }
+  return "http://localhost:3000";
+};
+
+const API_BASE = getApiUrl();
+
+// ========================================
+// 🔐 fetch موحد مع التوكن
+// ========================================
+async function authFetch(url: string, options: RequestInit = {}) {
+  const headers = new Headers(options.headers);
+  const token = getStoredToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return fetch(url, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
+}
 
 export default function FilesPage() {
   const [sections, setSections] = useState<any[]>([]);
@@ -15,9 +45,7 @@ export default function FilesPage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/sections`, {
-          credentials: "include",
-        });
+        const res = await authFetch(`${API_BASE}/api/sections`);
         const json = await res.json();
         if (json.success && Array.isArray(json.sections)) {
           setSections(json.sections);
@@ -42,7 +70,7 @@ export default function FilesPage() {
           fileId,
           name: s.name || `القسم ${s.id}`,
           category: s.category,
-          questionCount: Array.isArray(s.questions) ? s.questions.length : s.questionCount || 0,
+          questionCount: s.questionCount || 0,
           solvedApiUrl: `/api/pdfs/solved/section${fileId}.pdf`,
           unsolvedApiUrl: `/api/pdfs/unsolved/section${fileId}.pdf`,
         };
@@ -60,18 +88,15 @@ export default function FilesPage() {
     );
   }, [filesData, search]);
 
-  // ========================================
-  // 🔐 جلب PDF من السيرفر المحمي وفتحه في تبويب جديد
-  // ========================================
   const openPdf = async (apiPath: string, sectionName: string) => {
     const fileKey = `${apiPath}`;
     setOpeningFile(fileKey);
     setErrorMessage(null);
 
     try {
-      const res = await fetch(`${API_BASE}${apiPath}`, {
+      // ✅ يستخدم authFetch اللي يرسل التوكن تلقائياً
+      const res = await authFetch(`${API_BASE}${apiPath}`, {
         method: "GET",
-        credentials: "include", // 🔐 إرسال كوكي الجلسة
       });
 
       if (res.status === 401) {
@@ -98,11 +123,8 @@ export default function FilesPage() {
         return;
       }
 
-      // تحويل الاستجابة إلى blob
       const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
-
-      // فتح في تبويب جديد
       const newWindow = window.open(blobUrl, "_blank");
 
       if (!newWindow) {
@@ -112,11 +134,7 @@ export default function FilesPage() {
         return;
       }
 
-      // تنظيف الـ blob URL بعد فترة (عشان المتصفح ما يحتفظ بالذاكرة)
-      setTimeout(() => {
-        URL.revokeObjectURL(blobUrl);
-      }, 60000);
-
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
       setOpeningFile(null);
     } catch (err) {
       console.error("فشل فتح الملف:", err);
@@ -135,7 +153,6 @@ export default function FilesPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
-      {/* HEADER */}
       <div className="mb-8 flex items-center gap-3">
         <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-gold-500/20 bg-gold-500/10 text-gold-400">
           <FolderOpen size={22} />
@@ -148,7 +165,6 @@ export default function FilesPage() {
         </div>
       </div>
 
-      {/* رسالة الخطأ */}
       {errorMessage && (
         <div className="mb-6 flex items-center gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
           <AlertCircle size={20} className="shrink-0 text-red-400" />
@@ -162,7 +178,6 @@ export default function FilesPage() {
         </div>
       )}
 
-      {/* STATS */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
           <div className="text-xs font-semibold text-ink-400">إجمالي الملفات</div>
@@ -178,7 +193,6 @@ export default function FilesPage() {
         </div>
       </div>
 
-      {/* TOOLBAR */}
       <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400" />
@@ -226,7 +240,6 @@ export default function FilesPage() {
 
       <div className="mb-4 text-sm text-ink-400">{filtered.length} قسم</div>
 
-      {/* GRID */}
       {filtered.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-white/20 bg-white/5 p-12 text-center">
           <FolderOpen size={40} className="mx-auto mb-3 text-ink-400" />
@@ -244,7 +257,6 @@ export default function FilesPage() {
                 key={file.id}
                 className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/5 transition hover:border-gold-500/40 hover:shadow-lg"
               >
-                {/* CARD HEADER */}
                 <div className="flex items-center gap-3 border-b border-white/10 p-4">
                   <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gold-500/10 text-sm font-black text-gold-400">
                     {file.fileId}
@@ -260,7 +272,6 @@ export default function FilesPage() {
                   </span>
                 </div>
 
-                {/* BUTTONS */}
                 <div className="flex flex-col gap-2 p-4">
                   {(filter === "all" || filter === "solved") && (
                     <button
@@ -308,7 +319,6 @@ export default function FilesPage() {
         </div>
       )}
 
-      {/* NOTE */}
       <div className="mt-8 rounded-2xl border border-gold-500/20 bg-gold-500/5 p-4 text-center text-xs text-ink-400">
         💡 اضغط على أي نسخة لفتحها في تبويب جديد، ثم استخدم زر الحفظ في المتصفح لتحميلها على جهازك.
       </div>
