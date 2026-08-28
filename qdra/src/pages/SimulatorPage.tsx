@@ -173,27 +173,49 @@ export default function SimulatorPage() {
       : sectionsMeta.length;
 
     const allQuestions: any[] = [];
-    const sectionIdsInRange = sectionsMeta
-      .filter((meta) => meta.id >= rangeFrom && meta.id <= rangeTo)
-      .map((m) => m.id);
 
-    for (const sectionId of sectionIdsInRange) {
-      try {
-        const questions = await loadSectionQuestions(sectionId);
-        if (Array.isArray(questions) && questions.length > 0) {
-          const meta = sectionsMeta.find((m) => m.id === sectionId);
-          questions.forEach((q) => {
-            if (q && (q.text || q.question || q.title)) {
-              allQuestions.push({
-                ...q,
-                sectionId,
-                sectionTitle: meta?.name || `القسم ${sectionId}`,
-              });
-            }
-          });
+    // ⚠️ استخدم الأقسام الفعلية من السيرفر (وليس 301 معرّفة مسبقاً)
+    const sourceSections = serverSections.length > 0 ? serverSections : [];
+    const sectionsInRange = sourceSections
+      .filter((s) => s.id >= rangeFrom && s.id <= rangeTo);
+
+    // 🔀 نخلط الأقسام ونأخذ عينة فقط حتى لا يتجاوز عدد الطلبات حد الـ rate limit
+    // (الخادم يسمح بـ 100 طلب/دقيقة). بحد أقصى 40 قسم يكفي لجمع العدد المطلوب.
+    const MAX_FETCH_SECTIONS = 40;
+    const shuffledSections = [...sectionsInRange].sort(() => 0.5 - Math.random());
+    let needed = finalCount;
+    const fetchSections: SectionMeta[] = [];
+    for (const s of shuffledSections) {
+      fetchSections.push(s);
+      needed -= s.questionCount || 0;
+      if (fetchSections.length >= MAX_FETCH_SECTIONS || needed <= 0) break;
+    }
+
+    // ✅ جلب الأسئلة بالتوازي (بدل التسلسل) حتى لا يعلق "جاري تحضير الاختبار"
+    const results = await Promise.all(
+      fetchSections.map(async (sec) => {
+        try {
+          const questions = await loadSectionQuestions(sec.id);
+          return { sectionId: sec.id, questions: Array.isArray(questions) ? questions : [] };
+        } catch (err) {
+          console.warn(`تجاوز القسم ${sec.id} (تعذر جلب الأسئلة)`);
+          return { sectionId: sec.id, questions: [] };
         }
-      } catch (err) {
-        console.warn(`تجاوز القسم ${sectionId} (تعذر جلب الأسئلة)`);
+      })
+    );
+
+    for (const { sectionId, questions } of results) {
+      if (questions.length > 0) {
+        const meta = sectionsMeta.find((m) => m.id === sectionId);
+        questions.forEach((q) => {
+          if (q && q.question) {
+            allQuestions.push({
+              ...q,
+              sectionId,
+              sectionTitle: meta?.name || `القسم ${sectionId}`,
+            });
+          }
+        });
       }
     }
 

@@ -43,6 +43,7 @@ const app = Fastify({
 const ALLOWED_ORIGINS = [
   "https://qdra.vercel.app",
   "https://qudrat.app",
+  "https://admin-lx6f.vercel.app",
   "http://localhost:5173",
   "http://localhost:3000",
   "http://localhost:4173",
@@ -88,7 +89,7 @@ await app.register(helmet, {
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https:", "blob:"],
       scriptSrc: ["'self'", "'unsafe-inline'"],
-      connectSrc: ["'self'", "https://qdra.vercel.app", "https://qdra-1.onrender.com"],
+      connectSrc: ["'self'", "https://qdra.vercel.app", "https://qdra-1.onrender.com", "https://admin-lx6f.vercel.app"],
       frameAncestors: ["'none'"],
       upgradeInsecureRequests: [],
     },
@@ -109,7 +110,9 @@ await app.register(helmet, {
 // ========================================
 
 await app.register(rateLimit, {
-  max: 100,
+  // 200 بدل 100: المحاكي يجلب أسئلة من عدة أقسام دفعة واحدة،
+  // والحد السابق (100) كان يُضرب فتعطّل كل الـ API (حتى حفظ التقدم والمفضلة).
+  max: 200,
   timeWindow: "1 minute",
   keyGenerator: (request) => {
     const ip = request.ip || "unknown";

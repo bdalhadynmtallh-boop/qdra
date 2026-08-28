@@ -169,20 +169,41 @@ export async function progressRoutes(fastify: FastifyInstance) {
     }
 
     // ✅ جديد: استخراج timeMs من الـ body
-    const { sectionId, questionId, selectedAnswer, correctAnswer, isCorrect, timeMs } = request.body as any;
-    const timeSeconds = Math.max(0, Math.round((Number(timeMs) || 0) / 1000));
+    const { sectionId, questionId, selectedAnswer } = request.body as any;
+    const timeSeconds = Math.max(0, Math.round((Number((request.body as any).timeMs) || 0) / 1000));
 
     const strQuestionId = String(questionId);
     const numSectionId = Number(sectionId);
+
+    // 🔐 أمان: لا نثق بما يرسله العميل (isCorrect/correctAnswer) بل نحسب الصحة
+    // من السؤال المخزّن في قاعدة البيانات، حتى لا يتمكن المستخدم من تزييف النتائج.
+    const section = await fastify.prisma.section.findUnique({
+      where: { id: numSectionId },
+      select: { questions: true },
+    });
+
+    const questions: any[] = Array.isArray(section?.questions) ? section.questions : [];
+    const question = questions.find((q) => String(q.id) === strQuestionId || q.id === Number(questionId));
+
+    if (!question) {
+      return reply.status(404).send({
+        success: false,
+        message: "السؤال غير موجود",
+      });
+    }
+
+    const selectedNum = Number(selectedAnswer);
+    const isCorrect = selectedNum === Number(question.correctIndex);
+    const correctAnswer = Number(question.correctIndex);
 
     await fastify.prisma.questionAttempt.create({
       data: {
         userId,
         sectionId: numSectionId,
         questionId: strQuestionId,
-        selectedAnswer: Number(selectedAnswer || 0),
-        correctAnswer: Number(correctAnswer || 0),
-        isCorrect: Boolean(isCorrect),
+        selectedAnswer: selectedNum,
+        correctAnswer,
+        isCorrect,
       },
     });
 

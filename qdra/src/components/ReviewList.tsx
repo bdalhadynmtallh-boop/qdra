@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
-import { Search, Trash2, ChevronDown } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Search, Trash2, ChevronDown, Loader2 } from "lucide-react";
 import type { MistakeFavoriteItem, Question } from "../types";
 import { getSectionMetaById } from "../data/sectionsMeta";
-import { getSectionQuestions } from "../data/loadSections";
+import { getSectionQuestions, loadSectionQuestions } from "../data/loadSections";
 import { useAppData } from "../context/AppDataContext";
 import QuestionView from "./QuestionView";
 import EmptyState from "./EmptyState";
@@ -25,6 +25,27 @@ export default function ReviewList({ items, emptyTitle, emptyDescription, onRemo
   const { isFavorite, toggleFavorite, recordAnswer } = useAppData();
   const [search, setSearch] = useState("");
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [loadingSections, setLoadingSections] = useState(false);
+
+  // الأقسام الفريدة المذكورة في المفضلة/الأخطاء
+  const sectionIds = useMemo(() => {
+    return Array.from(new Set(items.map((i) => i.sectionId)));
+  }, [items]);
+
+  // تحميل أسئلة الأقسام المطلوبة حتى تظهر المفضلة/الأخطاء حتى بعد تحديث الصفحة
+  useEffect(() => {
+    if (sectionIds.length === 0) return;
+    let mounted = true;
+    setLoadingSections(true);
+    Promise.all(sectionIds.map((id) => loadSectionQuestions(id)))
+      .catch(() => {})
+      .finally(() => {
+        if (mounted) setLoadingSections(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [sectionIds]);
 
   const resolved: ResolvedItem[] = useMemo(() => {
     return items
@@ -35,7 +56,8 @@ export default function ReviewList({ items, emptyTitle, emptyDescription, onRemo
         return { ...item, question, sectionName: meta.name };
       })
       .filter((x): x is ResolvedItem => x !== null);
-  }, [items]);
+    // إعادة الحساب بعد اكتمال التحميل حتى تظهر الأسئلة
+  }, [items, loadingSections]);
 
   const filtered = useMemo(() => {
     const q = search.trim();
@@ -59,7 +81,12 @@ export default function ReviewList({ items, emptyTitle, emptyDescription, onRemo
         />
       </div>
 
-      {filtered.length === 0 ? (
+      {loadingSections && resolved.length === 0 ? (
+        <div className="flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 py-8 text-sm font-semibold text-ink-300">
+          <Loader2 size={18} className="animate-spin" />
+          جارٍ تحميل الأسئلة...
+        </div>
+      ) : filtered.length === 0 ? (
         <EmptyState title="لا توجد نتائج مطابقة" description="جرّب كلمة بحث مختلفة." />
       ) : (
         <div className="flex flex-col gap-3">
@@ -99,7 +126,9 @@ export default function ReviewList({ items, emptyTitle, emptyDescription, onRemo
                       totalQuestions={1}
                       isFavorite={isFavorite(item.sectionId, item.questionId)}
                       onToggleFavorite={() => toggleFavorite(item.sectionId, item.questionId)}
-                      onAnswered={(correct, timeMs) => recordAnswer(item.sectionId, item.questionId, correct, timeMs)}
+                      onAnswered={(selectedAnswer, correctAnswer, correct, timeMs) =>
+                        recordAnswer(item.sectionId, item.questionId, selectedAnswer, correctAnswer, correct, timeMs)
+                      }
                       onNext={() => setExpandedKey(null)}
                       autoAdvanceOnCorrect={false}
                     />

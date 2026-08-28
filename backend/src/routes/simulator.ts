@@ -34,14 +34,22 @@ export async function simulatorRoutes(fastify: FastifyInstance) {
       };
 
       const total = Number(totalQuestions || 0);
-      const correct = Number(correctAnswers || 0);
-      const wrong = Number(wrongAnswers || 0);
+      let correct = Number(correctAnswers || 0);
+      let wrong = Number(wrongAnswers || 0);
 
       if (total <= 0) {
         return reply.status(400).send({
           success: false,
           message: "عدد أسئلة المحاكي غير صحيح",
         });
+      }
+
+      // 🔐 أمان: منع أرقام سالبة أو مجموع يتجاوز الإجمالي (لا نثق بالعميل)
+      if (!Number.isFinite(correct) || correct < 0) correct = 0;
+      if (!Number.isFinite(wrong) || wrong < 0) wrong = 0;
+      if (correct + wrong > total) {
+        correct = Math.min(correct, total);
+        wrong = Math.min(wrong, total - correct);
       }
 
       const calculatedScore = Math.round((correct / total) * 100);

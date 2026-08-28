@@ -93,8 +93,22 @@ function withLoginGuard(
 }
 
 export async function authRoutes(app: FastifyInstance) {
-  // تسجيل حساب جديد للمستخدمين (ما يحتاج حماية — مش عملية متكررة)
-  app.post("/register", register);
+  // تسجيل حساب جديد للمستخدمين — محمي من الإساءة:
+  // حتى مع وجود كود تفعيل صالح، لا يُسمح بتسجيل عدد كبير من الحسابات
+  // من نفس العنوان في وقت قصير.
+  app.post(
+    "/register",
+    {
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: "10 minutes",
+          keyGenerator: (request) => request.ip || "unknown",
+        },
+      },
+    },
+    register
+  );
 
   // ========================================
   // 1. تسجيل الدخول بالرمز (OTP) - مع حماية brute-force
@@ -142,13 +156,10 @@ export async function authRoutes(app: FastifyInstance) {
   );
 
   // تسجيل الخروج ومسح جلسة المستخدم
-  app.post(
-    "/logout",
-    {
-      preHandler: app.authenticate,
-    },
-    logout
-  );
+  // لا نستخدم authenticate هنا لأنه يمنع (403) عند انتهاء الاشتراك —
+  // فيعلق المستخدم المنتهي اشتراكه ولا يستطيع تسجيل الخروج.
+  // logout فقط يحذف الجلسة المقابلة للكوكي المرسل، فهو آمن.
+  app.post("/logout", logout);
 
   // =========================================================================
   // 4. تجديد الاشتراك باستخدام كود التفعيل (محمي من التخمين كمان)

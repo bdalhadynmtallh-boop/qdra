@@ -2,10 +2,51 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import SectionsList from "./SectionsManager";
 
+// ✅ العنوان الديناميكي: من متغير البيئة أو خلفة ذكية مثل باقي الواجهة
+const getApiUrl = () => {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+  if (typeof window !== "undefined") {
+    if (window.location.hostname.includes("vercel.app")) return "https://qdra-1.onrender.com";
+  }
+  return "http://localhost:3000";
+};
+
 const api = axios.create({
-  baseURL: "http://localhost:3000",
+  baseURL: getApiUrl(),
   withCredentials: true,
 });
+
+// ✅ مصادقة عبر Bearer token (بدل الكوكي فقط):
+// اللوحة على vercel.app والخادم على onrender.com — دومينات مختلفة،
+// والكوكي sameSite:lax لا يُرسل بينها على الجوال. التوكن في الـ header يعمل عبر الدومينات.
+const ADMIN_TOKEN_KEY = "rhal_admin_token";
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem(ADMIN_TOKEN_KEY);
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+function saveAdminToken(token: string) {
+  localStorage.setItem(ADMIN_TOKEN_KEY, token);
+}
+
+function clearAdminToken() {
+  localStorage.removeItem(ADMIN_TOKEN_KEY);
+}
+
+// ✅ عند انتهاء الجلسة (401) نمسح التوكن تلقائياً حتى لا يعلق المستخدم
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      clearAdminToken();
+    }
+    return Promise.reject(error);
+  }
+);
 
 /* =========================================================
    TYPES
@@ -732,6 +773,11 @@ export default function App() {
           response.data.success
         ) {
 
+          // ✅ احفظ التوكن ليُرسل مع كل طلب (مصادقة عبر الدومينات)
+          if (response.data.token) {
+            saveAdminToken(response.data.token);
+          }
+
           setCurrentUser(
             response.data.user
           );
@@ -1255,6 +1301,9 @@ export default function App() {
           "/api/auth/logout"
         );
       } catch {}
+
+      // ✅ امسح التوكن المحفوظ
+      clearAdminToken();
 
       setIsAuthenticated(
         false

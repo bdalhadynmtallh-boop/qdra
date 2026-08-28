@@ -138,8 +138,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
           // ✅ دمج ذكي: نجمع progress المحلي مع السيرفر
           const mergedProgress = { ...prev.progress };
           for (const [key, value] of Object.entries(serverProgress)) {
-            if (!mergedProgress[key] && value) {
-              mergedProgress[key] = value as SectionProgress;
+            const sectionId = Number(key);
+            if (value && !mergedProgress[sectionId]) {
+              mergedProgress[sectionId] = value as SectionProgress;
             }
           }
 

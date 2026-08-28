@@ -22,20 +22,25 @@ export default fp(async (app) => {
   app.decorate(
     "authenticate",
     async (request: any, reply: any) => {
-      // 1. البحث عن التوكن أولاً في الكوكيز، وإذا لم يوجد، البحث في الـ Authorization Header
-      let token = request.cookies?.rhal_session;
+      // 1. البحث عن التوكن في هيدر Authorization أولاً (الأساسي في تطبيقك)
+      let token = null;
 
-      if (!token && request.headers.authorization) {
+      if (request.headers.authorization) {
         const parts = request.headers.authorization.split(" ");
         if (parts.length === 2 && parts[0] === "Bearer") {
           token = parts[1];
         }
       }
 
+      // 2. إذا لم يوجد في الهيدر، البحث في الكوكيز (كخطة احتياطية للتوافق مع الجوال أو المتصفحات القديمة)
+      if (!token && request.cookies?.rhal_session) {
+        token = request.cookies.rhal_session;
+      }
+
       console.log(
         "🔐 session token received:",
         Boolean(token),
-        token ? "(من الكوكي أو الـ Header)" : "(غير موجود)"
+        token ? "(من الهيدر أو الكوكي)" : "(غير موجود)"
       );
 
       if (!token) {
