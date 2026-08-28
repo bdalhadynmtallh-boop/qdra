@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
-import { FileText, CheckCircle, Search, FolderOpen, AlertCircle, Loader2 } from "lucide-react";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { FileText, CheckCircle, Search, FolderOpen, AlertCircle, Loader2, X, Download } from "lucide-react";
 import { getStoredToken } from "../auth/api";
 
 // ========================================
@@ -41,6 +41,32 @@ export default function FilesPage() {
   const [filter, setFilter] = useState<"all" | "solved" | "unsolved">("all");
   const [openingFile, setOpeningFile] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // 🖥️ عارض PDF داخل الصفحة (بدل فتح نافذة — لا يمنعه المتصفح أبداً)
+  const [pdfViewer, setPdfViewer] = useState<{
+    url: string;
+    title: string;
+    downloadUrl: string;
+  } | null>(null);
+
+  const blobUrlRef = useRef<string | null>(null);
+
+  const closeViewer = () => {
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+    setPdfViewer(null);
+  };
+
+  // تنظيف عند مغادرة الصفحة
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -93,26 +119,6 @@ export default function FilesPage() {
     setOpeningFile(fileKey);
     setErrorMessage(null);
 
-    // ✅ افتح النافذة فوراً (خلال تفاعل المستخدم) حتى لا يمنعها المتصفح
-    // كأنها نافذة منبثقة. سنملأها بالمحتوى بعد اكتمال التحميل.
-    const newWindow = window.open("", "_blank");
-
-    if (!newWindow) {
-      setErrorMessage("المتصفح منع فتح النافذة. يرجى السماح بالنوافذ المنبثقة لهذا الموقع.");
-      setOpeningFile(null);
-      return;
-    }
-
-    // اكتب رسالة تحميل مؤقتة داخل النافذة
-    try {
-      newWindow.document.write(
-        '<html dir="rtl"><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0a0a0a;color:#d1d5db;">جاري تحميل الملف...</body></html>'
-      );
-      newWindow.document.close();
-    } catch {
-      // تجاهل — بعض المتصفحات تقيد document.write للبوب أبدي
-    }
-
     try {
       // ✅ يستخدم authFetch اللي يرسل التوكن تلقائياً
       const res = await authFetch(`${API_BASE}${apiPath}`, {
@@ -120,28 +126,24 @@ export default function FilesPage() {
       });
 
       if (res.status === 401) {
-        newWindow.close();
         setErrorMessage("يجب تسجيل الدخول للوصول إلى ملفات PDF");
         setOpeningFile(null);
         return;
       }
 
       if (res.status === 403) {
-        newWindow.close();
         setErrorMessage("انتهى اشتراكك — جدّد الاشتراك للوصول إلى الملفات");
         setOpeningFile(null);
         return;
       }
 
       if (res.status === 404) {
-        newWindow.close();
         setErrorMessage(`ملف "${sectionName}" غير متوفر حالياً`);
         setOpeningFile(null);
         return;
       }
 
       if (!res.ok) {
-        newWindow.close();
         setErrorMessage(`تعذر تحميل الملف (خطأ ${res.status})`);
         setOpeningFile(null);
         return;
@@ -149,13 +151,19 @@ export default function FilesPage() {
 
       const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
-      newWindow.location.href = blobUrl;
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = blobUrl;
 
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      // 🖥️ اعرض PDF داخل نفس الصفحة (بلا فتح نافذة — لا مانع نوافذ منبثقة أبداً)
+      setPdfViewer({
+        url: blobUrl,
+        title: sectionName,
+        downloadUrl: blobUrl,
+      });
+
       setOpeningFile(null);
     } catch (err) {
       console.error("فشل فتح الملف:", err);
-      try { newWindow.close(); } catch {}
       setErrorMessage("تعذر الاتصال بالسيرفر، حاول مرة أخرى");
       setOpeningFile(null);
     }
@@ -338,8 +346,58 @@ export default function FilesPage() {
       )}
 
       <div className="mt-8 rounded-2xl border border-gold-500/20 bg-gold-500/5 p-4 text-center text-xs text-ink-400">
-        💡 اضغط على أي نسخة لفتحها في تبويب جديد، ثم استخدم زر الحفظ في المتصفح لتحميلها على جهازك.
+        💡 اضغط على أي نسخة لعرضها هنا مباشرة داخل الصفحة، وزر التحميل بالأسفل لحفظها على جهازك.
       </div>
+
+      {/* 🖥️ عارض PDF داخل الصفحة */}
+      {pdfViewer && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-black/90 backdrop-blur-sm"
+          style={{ padding: "env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px)" }}
+          onClick={closeViewer}
+        >
+          {/* الشريط العلوي */}
+          <div
+            className="flex items-center justify-between gap-3 px-4 py-3"
+            onClick={(e) => e.stopPropagation()}
+            style={{ borderBottom: "1px solid rgba(255,255,255,0.1)" }}
+          >
+            <div className="flex min-w-0 items-center gap-2 text-ink-100">
+              <FileText size={18} className="shrink-0 text-gold-400" />
+              <span className="truncate text-sm font-bold">{pdfViewer.title}</span>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-2">
+              <a
+                href={pdfViewer.downloadUrl}
+                download={`${pdfViewer.title}.pdf`}
+                onClick={(e) => e.stopPropagation()}
+                className="press flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/20 px-3 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/30"
+              >
+                <Download size={14} />
+                تحميل
+              </a>
+
+              <button
+                onClick={closeViewer}
+                className="press flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-ink-200 hover:bg-white/15"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+
+          {/* PDF */}
+          <div className="min-h-0 flex-1" onClick={(e) => e.stopPropagation()}>
+            <iframe
+              src={pdfViewer.url}
+              title={pdfViewer.title}
+              className="h-full w-full"
+              style={{ border: 0 }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
