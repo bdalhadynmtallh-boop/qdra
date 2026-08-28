@@ -93,6 +93,26 @@ export default function FilesPage() {
     setOpeningFile(fileKey);
     setErrorMessage(null);
 
+    // ✅ افتح النافذة فوراً (خلال تفاعل المستخدم) حتى لا يمنعها المتصفح
+    // كأنها نافذة منبثقة. سنملأها بالمحتوى بعد اكتمال التحميل.
+    const newWindow = window.open("", "_blank");
+
+    if (!newWindow) {
+      setErrorMessage("المتصفح منع فتح النافذة. يرجى السماح بالنوافذ المنبثقة لهذا الموقع.");
+      setOpeningFile(null);
+      return;
+    }
+
+    // اكتب رسالة تحميل مؤقتة داخل النافذة
+    try {
+      newWindow.document.write(
+        '<html dir="rtl"><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0a0a0a;color:#d1d5db;">جاري تحميل الملف...</body></html>'
+      );
+      newWindow.document.close();
+    } catch {
+      // تجاهل — بعض المتصفحات تقيد document.write للبوب أبدي
+    }
+
     try {
       // ✅ يستخدم authFetch اللي يرسل التوكن تلقائياً
       const res = await authFetch(`${API_BASE}${apiPath}`, {
@@ -100,24 +120,28 @@ export default function FilesPage() {
       });
 
       if (res.status === 401) {
+        newWindow.close();
         setErrorMessage("يجب تسجيل الدخول للوصول إلى ملفات PDF");
         setOpeningFile(null);
         return;
       }
 
       if (res.status === 403) {
+        newWindow.close();
         setErrorMessage("انتهى اشتراكك — جدّد الاشتراك للوصول إلى الملفات");
         setOpeningFile(null);
         return;
       }
 
       if (res.status === 404) {
+        newWindow.close();
         setErrorMessage(`ملف "${sectionName}" غير متوفر حالياً`);
         setOpeningFile(null);
         return;
       }
 
       if (!res.ok) {
+        newWindow.close();
         setErrorMessage(`تعذر تحميل الملف (خطأ ${res.status})`);
         setOpeningFile(null);
         return;
@@ -125,19 +149,13 @@ export default function FilesPage() {
 
       const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
-      const newWindow = window.open(blobUrl, "_blank");
-
-      if (!newWindow) {
-        setErrorMessage("المتصفح منع فتح النافذة. يرجى السماح بالنوافذ المنبثقة لهذا الموقع.");
-        URL.revokeObjectURL(blobUrl);
-        setOpeningFile(null);
-        return;
-      }
+      newWindow.location.href = blobUrl;
 
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
       setOpeningFile(null);
     } catch (err) {
       console.error("فشل فتح الملف:", err);
+      try { newWindow.close(); } catch {}
       setErrorMessage("تعذر الاتصال بالسيرفر، حاول مرة أخرى");
       setOpeningFile(null);
     }
