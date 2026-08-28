@@ -89,7 +89,7 @@ interface StatsType {
   suspendedUsers: number;
 }
 
-type Page = "dashboard" | "users" | "codes" | "sections";
+type Page = "dashboard" | "users" | "codes" | "sections" | "activities" | "sessions";
 
 /* =========================================================
    DESIGN SYSTEM
@@ -688,6 +688,207 @@ export default function App() {
     message: string;
     onConfirm: () => void;
   } | null>(null);
+
+  // 📋 نافذة سجل النشاط للمستخدم
+  const [userDetailModal, setUserDetailModal] =
+    useState<{
+      user: UserType;
+      sessions?: any[];
+      questionAttempts?: any[];
+      simulatorAttempts?: any[];
+      _count?: any;
+      stats?: any;
+      loading?: boolean;
+    } | null>(null);
+
+  const openUserDetail =
+    async (userId: string) => {
+
+      setUserDetailModal({
+        user: {
+          id: userId,
+          email: "",
+          name: "",
+          role: "",
+          isActive: true,
+        },
+        loading: true,
+      });
+
+      try {
+        const response =
+          await api.get(
+            `/api/admin/users/${userId}`
+          );
+
+        const data =
+          response.data.user;
+
+        setUserDetailModal({
+          user: {
+            id: data.id,
+            email: data.email,
+            name: data.name,
+            role: data.role,
+            isActive: data.isActive,
+            createdAt: data.createdAt,
+            lastLoginAt: data.lastLoginAt,
+            subscriptionExpiresAt:
+              data.subscriptionExpiresAt,
+          },
+          sessions:
+            data.sessions || [],
+          questionAttempts:
+            data.questionAttempts || [],
+          simulatorAttempts:
+            data.simulatorAttempts || [],
+          _count: data._count,
+          stats: data.stats,
+          loading: false,
+        });
+      } catch (error: any) {
+        showToast(
+          error.response?.data?.message ||
+            "تعذر تحميل سجل المستخدم",
+          "error"
+        );
+        setUserDetailModal(null);
+      }
+    };
+
+  // 📋 بيانات النشاطات والجلسات
+  const [activities, setActivities] =
+    useState<any[]>([]);
+  const [activitiesLoading, setActivitiesLoading] =
+    useState(false);
+  const [sessionsList, setSessionsList] =
+    useState<any[]>([]);
+  const [sessionsLoading, setSessionsLoading] =
+    useState(false);
+
+  const fetchActivities =
+    async () => {
+      setActivitiesLoading(true);
+      try {
+        const res =
+          await api.get(
+            "/api/admin/activities?limit=100"
+          );
+        setActivities(
+          res.data.activities || []
+        );
+      } catch (e: any) {
+        showToast(
+          e.response?.data?.message || "تعذر تحميل النشاطات",
+          "error"
+        );
+      } finally {
+        setActivitiesLoading(false);
+      }
+    };
+
+  const fetchSessions =
+    async () => {
+      setSessionsLoading(true);
+      try {
+        const res =
+          await api.get(
+            "/api/admin/sessions"
+          );
+        setSessionsList(
+          res.data.sessions || []
+        );
+      } catch (e: any) {
+        showToast(
+          e.response?.data?.message || "تعذر تحميل الجلسات",
+          "error"
+        );
+      } finally {
+        setSessionsLoading(false);
+      }
+    };
+
+  // 📥 تصدير CSV
+  const exportCSV =
+    (
+      filename: string,
+      headers: string[],
+      rows: (string | number)[][]
+    ) => {
+      const esc =
+        (v: string | number) =>
+          `"${String(v).replace(/"/g, '""')}"`;
+
+      const csv =
+        [headers.map(esc).join(",")]
+          .concat(
+            rows.map((r) =>
+              r.map(esc).join(",")
+            )
+          )
+          .join("\n");
+
+      const blob =
+        new Blob(
+          ["\uFEFF" + csv],
+          { type: "text/csv;charset=utf-8;" }
+        );
+
+      const url =
+        URL.createObjectURL(blob);
+
+      const a =
+        document.createElement("a");
+
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+
+  const exportUsers =
+    () =>
+      exportCSV(
+        "users.csv",
+        ["الاسم", "البريد", "الحالة", "الاشتراك", "آخر دخول", "تاريخ التسجيل"],
+        users.map((u) => [
+          u.name || "بدون اسم",
+          u.email,
+          u.isActive === false
+            ? "معطل"
+            : u.subscriptionExpiresAt &&
+              new Date(u.subscriptionExpiresAt) <= new Date()
+            ? "منتهي"
+            : "نشط",
+          u.subscriptionExpiresAt
+            ? formatDate(u.subscriptionExpiresAt)
+            : "—",
+          u.lastLoginAt
+            ? formatDate(u.lastLoginAt)
+            : "لم يسجل",
+          u.createdAt
+            ? formatDate(u.createdAt)
+            : "—",
+        ])
+      );
+
+  const exportCodes =
+    () =>
+      exportCSV(
+        "codes.csv",
+        ["الكود", "المدة (يوم)", "الحالة", "المستخدم", "الإنشاء"],
+        codes.map((c) => [
+          c.code,
+          c.durationDays,
+          c.used ? "مستخدم" : "متاح",
+          c.user?.email || "—",
+          c.createdAt
+            ? formatDate(c.createdAt)
+            : "—",
+        ])
+      );
 
   /* =========================================================
      AUTH FUNCTIONS
@@ -1333,6 +1534,35 @@ export default function App() {
               user.isActive ===
               false
           );
+
+      } else if (
+        userStatusFilter ===
+        "expiring"
+      ) {
+
+        // 🔔 قريب الانتهاء: اشتراك ينتهي خلال 7 أيام (لم ينتهِ بعد)
+        const now =
+          new Date();
+
+        const threshold =
+          new Date(
+            now.getTime() +
+              7 * 24 * 60 * 60 * 1000
+          );
+
+        result =
+          result.filter(
+            (user) =>
+              user.isActive !==
+                false &&
+              user.subscriptionExpiresAt &&
+              new Date(
+                user.subscriptionExpiresAt
+              ) > now &&
+              new Date(
+                user.subscriptionExpiresAt
+              ) <= threshold
+          );
       }
 
       return result;
@@ -1887,6 +2117,383 @@ export default function App() {
 
       )}
 
+      {userDetailModal && (
+
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+
+            zIndex: 9997,
+
+            background:
+              "rgba(3,5,8,.85)",
+
+            backdropFilter:
+              "blur(5px)",
+
+            display: "flex",
+
+            alignItems:
+              "center",
+
+            justifyContent:
+              "center",
+
+            padding: 20,
+          }}
+        >
+          <div
+            style={{
+              background:
+                COLORS.bgPanel,
+
+              border:
+                `1px solid ${COLORS.border}`,
+
+              borderRadius: 18,
+
+              padding: 26,
+
+              maxWidth: 720,
+
+              width: "100%",
+
+              maxHeight: "88vh",
+
+              overflowY: "auto",
+
+              boxShadow:
+                "0 30px 80px rgba(0,0,0,.5)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+
+                justifyContent:
+                  "space-between",
+
+                alignItems:
+                  "center",
+
+                marginBottom: 18,
+              }}
+            >
+              <div>
+                <h2
+                  style={{
+                    margin: 0,
+
+                    fontSize: 19,
+
+                    fontWeight: 800,
+
+                    color:
+                      COLORS.textPrimary,
+                  }}
+                >
+                  سجل النشاط
+                </h2>
+                <div
+                  style={{
+                    marginTop: 4,
+
+                    fontSize: 13,
+
+                    color:
+                      COLORS.textMuted,
+                  }}
+                >
+                  {userDetailModal.user.email}
+                </div>
+              </div>
+
+              <button
+                type="button"
+
+                onClick={() =>
+                  setUserDetailModal(
+                    null
+                  )
+                }
+
+                style={{
+                  border: 0,
+
+                  background:
+                    "transparent",
+
+                  color:
+                    COLORS.textMuted,
+
+                  fontSize: 22,
+
+                  cursor:
+                    "pointer",
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {userDetailModal.loading ? (
+              <div
+                style={{
+                  padding: 30,
+
+                  textAlign: "center",
+
+                  color:
+                    COLORS.textMuted,
+                }}
+              >
+                جاري تحميل السجل...
+              </div>
+            ) : (
+              <>
+                {/* ملخص */}
+                <div
+                  style={{
+                    display: "grid",
+
+                    gridTemplateColumns:
+                      "repeat(auto-fit, minmax(120px, 1fr))",
+
+                    gap: 10,
+
+                    marginBottom: 18,
+                  }}
+                >
+                  <StatCard
+                    label="آخر دخول"
+                    value={
+                      userDetailModal.user.lastLoginAt
+                        ? formatDate(
+                            userDetailModal.user.lastLoginAt
+                          )
+                        : "—"
+                    }
+                    icon="🕐"
+                  />
+                  <StatCard
+                    label="إجابات"
+                    value={
+                      userDetailModal._count?.questionAttempts ?? 0
+                    }
+                    icon="✍"
+                  />
+                  <StatCard
+                    label="محاكيات"
+                    value={
+                      userDetailModal._count?.simulatorAttempts ?? 0
+                    }
+                    icon="🎯"
+                  />
+                  <StatCard
+                    label="مفضلة"
+                    value={
+                      userDetailModal._count?.favorites ?? 0
+                    }
+                    icon="⭐"
+                  />
+                </div>
+
+                {/* سجل الدخول */}
+                <div
+                  style={{
+                    marginBottom: 18,
+                  }}
+                >
+                  <h3
+                    style={{
+                      margin: "0 0 10px",
+
+                      fontSize: 14,
+
+                      fontWeight: 800,
+
+                      color:
+                        COLORS.gold,
+                    }}
+                  >
+                    🕐 سجل الدخول ({userDetailModal.sessions?.length ?? 0})
+                  </h3>
+
+                  {userDetailModal.sessions?.length ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                      }}
+                    >
+                      {userDetailModal.sessions.map((s) => (
+                        <div
+                          key={s.id}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            background: "rgba(255,255,255,.04)",
+                            borderRadius: 9,
+                            padding: "9px 13px",
+                            fontSize: 13,
+                          }}
+                        >
+                          <span style={{ color: COLORS.textSecondary }}>
+                            دخول: {formatDate(s.createdAt)}
+                          </span>
+                          <span style={{ color: COLORS.textMuted }}>
+                            ينتهي: {formatDate(s.expiresAt)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: COLORS.textMuted,
+                      }}
+                    >
+                      لا يوجد سجل دخول.
+                    </div>
+                  )}
+                </div>
+
+                {/* النشاط الدراسي */}
+                <div
+                  style={{
+                    marginBottom: 18,
+                  }}
+                >
+                  <h3
+                    style={{
+                      margin: "0 0 10px",
+
+                      fontSize: 14,
+
+                      fontWeight: 800,
+
+                      color:
+                        COLORS.gold,
+                    }}
+                  >
+                    📚 النشاط الدراسي ({userDetailModal.questionAttempts?.length ?? 0} محاولة)
+                  </h3>
+
+                  {userDetailModal.questionAttempts?.length ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                      }}
+                    >
+                      {userDetailModal.questionAttempts.slice(0, 10).map((a) => (
+                        <div
+                          key={a.id}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            background: "rgba(255,255,255,.04)",
+                            borderRadius: 9,
+                            padding: "9px 13px",
+                            fontSize: 13,
+                          }}
+                        >
+                          <span style={{ color: COLORS.textSecondary }}>
+                            قسم {a.sectionId} • سؤال {a.questionId}
+                          </span>
+                          <span
+                            style={{
+                              color: a.isCorrect
+                                ? COLORS.success
+                                : COLORS.danger,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {a.isCorrect ? "صحيح ✓" : "خطأ ✗"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: COLORS.textMuted,
+                      }}
+                    >
+                      لا يوجد نشاط دراسي بعد.
+                    </div>
+                  )}
+                </div>
+
+                {/* المحاكيات */}
+                <div>
+                  <h3
+                    style={{
+                      margin: "0 0 10px",
+
+                      fontSize: 14,
+
+                      fontWeight: 800,
+
+                      color:
+                        COLORS.gold,
+                    }}
+                  >
+                    🎯 محاولات المحاكي ({userDetailModal.simulatorAttempts?.length ?? 0})
+                  </h3>
+
+                  {userDetailModal.simulatorAttempts?.length ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                      }}
+                    >
+                      {userDetailModal.simulatorAttempts.slice(0, 6).map((s) => (
+                        <div
+                          key={s.id}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            background: "rgba(255,255,255,.04)",
+                            borderRadius: 9,
+                            padding: "9px 13px",
+                            fontSize: 13,
+                          }}
+                        >
+                          <span style={{ color: COLORS.textSecondary }}>
+                            {s.correctAnswers} من {s.totalQuestions}
+                          </span>
+                          <span style={{ color: COLORS.gold, fontWeight: 700 }}>
+                            {s.score != null ? `${Math.round(s.score)}%` : "—"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: COLORS.textMuted,
+                      }}
+                    >
+                      لا توجد محاولات محاكي.
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+      )}
+
       {/* HEADER */}
 
       <header
@@ -2220,6 +2827,42 @@ export default function App() {
             }
           />
 
+          <SidebarButton
+            active={
+              activePage ===
+              "activities"
+            }
+
+            icon="📜"
+
+            label="النشاطات"
+
+            onClick={() => {
+              navigate("activities");
+              fetchActivities();
+            }}
+          />
+
+          <SidebarButton
+            active={
+              activePage ===
+              "sessions"
+            }
+
+            icon="🔐"
+
+            label="الجلسات"
+
+            badge={
+              stats.activeSessions
+            }
+
+            onClick={() => {
+              navigate("sessions");
+              fetchSessions();
+            }}
+          />
+
           <div
             style={{
               height: 1,
@@ -2390,6 +3033,326 @@ export default function App() {
                   }
                 />
 
+              </div>
+
+              {/* 📊 رسوم بيانية */}
+              <div
+                style={{
+                  display: "grid",
+
+                  gridTemplateColumns:
+                    "repeat(auto-fit, minmax(300px, 1fr))",
+
+                  gap: 14,
+
+                  marginBottom: 20,
+                }}
+              >
+                <section
+                  className="qd-card"
+
+                  style={{
+                    background:
+                      COLORS.bgPanel,
+
+                    border:
+                      `1px solid ${COLORS.border}`,
+
+                    borderRadius: 17,
+
+                    padding: 20,
+                  }}
+                >
+                  <SectionTitle
+                    title="حالة الاشتراكات"
+
+                    description="توزيع المستخدمين حسب حالة الاشتراك"
+                  />
+
+                  {/* نشط */}
+                  <div
+                    style={{
+                      marginTop: 16,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <span>نشط</span>
+                      <span style={{ color: COLORS.success }}>
+                        {users.filter(
+                          (u) =>
+                            u.isActive !== false &&
+                            u.subscriptionExpiresAt &&
+                            new Date(u.subscriptionExpiresAt) > new Date()
+                        ).length}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        height: 10,
+                        borderRadius: 6,
+                        background: "rgba(255,255,255,.06)",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${
+                            users.length
+                              ? (users.filter(
+                                  (u) =>
+                                    u.isActive !== false &&
+                                    u.subscriptionExpiresAt &&
+                                    new Date(u.subscriptionExpiresAt) > new Date()
+                                ).length /
+                                  users.length) *
+                                100
+                              : 0
+                          }%`,
+                          height: "100%",
+                          borderRadius: 6,
+                          background: COLORS.success,
+                          transition: "width .6s ease",
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* قريب الانتهاء */}
+                  <div
+                    style={{
+                      marginTop: 14,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <span>⏳ قريب الانتهاء (7 أيام)</span>
+                      <span style={{ color: "#f5a742" }}>
+                        {users.filter(
+                          (u) => {
+                            const now = new Date();
+                            const t = new Date(
+                              now.getTime() + 7 * 24 * 60 * 60 * 1000
+                            );
+                            return (
+                              u.isActive !== false &&
+                              u.subscriptionExpiresAt &&
+                              new Date(u.subscriptionExpiresAt) > now &&
+                              new Date(u.subscriptionExpiresAt) <= t
+                            );
+                          }
+                        ).length}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        height: 10,
+                        borderRadius: 6,
+                        background: "rgba(255,255,255,.06)",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${
+                            users.length
+                              ? (users.filter(
+                                  (u) => {
+                                    const now = new Date();
+                                    const t = new Date(
+                                      now.getTime() + 7 * 24 * 60 * 60 * 1000
+                                    );
+                                    return (
+                                      u.isActive !== false &&
+                                      u.subscriptionExpiresAt &&
+                                      new Date(u.subscriptionExpiresAt) > now &&
+                                      new Date(u.subscriptionExpiresAt) <= t
+                                    );
+                                  }
+                                ).length /
+                                  users.length) *
+                                100
+                              : 0
+                          }%`,
+                          height: "100%",
+                          borderRadius: 6,
+                          background: "#f5a742",
+                          transition: "width .6s ease",
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* منتهي */}
+                  <div
+                    style={{
+                      marginTop: 14,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <span>منتهي الاشتراك</span>
+                      <span style={{ color: COLORS.danger }}>
+                        {users.filter(
+                          (u) =>
+                            u.subscriptionExpiresAt &&
+                            new Date(u.subscriptionExpiresAt) <= new Date()
+                        ).length}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        height: 10,
+                        borderRadius: 6,
+                        background: "rgba(255,255,255,.06)",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${
+                            users.length
+                              ? (users.filter(
+                                  (u) =>
+                                    u.subscriptionExpiresAt &&
+                                    new Date(u.subscriptionExpiresAt) <= new Date()
+                                ).length /
+                                  users.length) *
+                                100
+                              : 0
+                          }%`,
+                          height: "100%",
+                          borderRadius: 6,
+                          background: COLORS.danger,
+                          transition: "width .6s ease",
+                        }}
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                {/* بطاقة إضافية: توزيع الأكواد */}
+                <section
+                  className="qd-card"
+
+                  style={{
+                    background:
+                      COLORS.bgPanel,
+
+                    border:
+                      `1px solid ${COLORS.border}`,
+
+                    borderRadius: 17,
+
+                    padding: 20,
+                  }}
+                >
+                  <SectionTitle
+                    title="أداء الأكواد"
+
+                    description="نسبة استخدام أكواد التفعيل"
+                  />
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 26,
+                      marginTop: 20,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    {/* دائرة نسبية */}
+                    <div
+                      style={{
+                        width: 120,
+                        height: 120,
+                        borderRadius: "50%",
+                        background:
+                          `conic-gradient(${COLORS.gold} ${
+                            stats.activationCodes
+                              ? (stats.usedCodes / stats.activationCodes) * 100
+                              : 0
+                          }%, rgba(255,255,255,.07) 0)`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        position: "relative",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 84,
+                          height: 84,
+                          borderRadius: "50%",
+                          background: COLORS.bgPanel,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 22,
+                          fontWeight: 800,
+                          color: COLORS.gold,
+                        }}
+                      >
+                        {stats.activationCodes
+                          ? Math.round(
+                              (stats.usedCodes / stats.activationCodes) * 100
+                            )
+                          : 0}
+                        %
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 9,
+                      }}
+                    >
+                      <div style={{ fontSize: 14, color: COLORS.textMuted }}>
+                        <span style={{ fontWeight: 800, color: COLORS.textPrimary }}>
+                          {stats.usedCodes}
+                        </span>{" "}
+                        مستخدمة
+                      </div>
+                      <div style={{ fontSize: 14, color: COLORS.textMuted }}>
+                        <span style={{ fontWeight: 800, color: COLORS.gold }}>
+                          {stats.unusedCodes}
+                        </span>{" "}
+                        متاحة
+                      </div>
+                      <div style={{ fontSize: 14, color: COLORS.textMuted }}>
+                        <span style={{ fontWeight: 800, color: COLORS.textPrimary }}>
+                          {stats.activationCodes}
+                        </span>{" "}
+                        إجمالي
+                      </div>
+                    </div>
+                  </div>
+                </section>
               </div>
 
               {/* QUICK ACTIONS */}
@@ -2587,6 +3550,157 @@ export default function App() {
 
               </section>
 
+              {/* ⏳ اشتراكات تنتهي قريبًا */}
+              <section
+                className="qd-card"
+
+                style={{
+                  background:
+                    COLORS.bgPanel,
+
+                  border:
+                    `1px solid ${COLORS.border}`,
+
+                  borderRadius: 17,
+
+                  overflow: "hidden",
+
+                  marginTop: 20,
+                }}
+              >
+                <div
+                  style={{
+                    padding: 20,
+
+                    display: "flex",
+
+                    justifyContent:
+                      "space-between",
+
+                    alignItems:
+                      "center",
+
+                    borderBottom:
+                      `1px solid ${COLORS.border}`,
+                  }}
+                >
+                  <SectionTitle
+                    title="⏳ اشتراكات تنتهي قريبًا"
+
+                    description="مستخدموك اللي اشتراكهم ينتهي خلال 7 أيام"
+
+                    noMargin
+                  />
+
+                  <button
+                    type="button"
+
+                    onClick={() => {
+                      setUserStatusFilter("expiring");
+                      navigate("users");
+                    }}
+
+                    style={{
+                      border: 0,
+
+                      background:
+                        "transparent",
+
+                      color:
+                        COLORS.gold,
+
+                      cursor:
+                        "pointer",
+
+                      fontFamily:
+                        "inherit",
+
+                      fontWeight: 700,
+
+                      fontSize: 14,
+                    }}
+                  >
+                    عرض الكل
+                  </button>
+                </div>
+
+                {users.filter(
+                  (u) => {
+                    const now = new Date();
+                    const t = new Date(
+                      now.getTime() + 7 * 24 * 60 * 60 * 1000
+                    );
+                    return (
+                      u.isActive !== false &&
+                      u.subscriptionExpiresAt &&
+                      new Date(u.subscriptionExpiresAt) > now &&
+                      new Date(u.subscriptionExpiresAt) <= t
+                    );
+                  }
+                ).length === 0 ? (
+                  <div
+                    style={{
+                      padding: 24,
+
+                      textAlign: "center",
+
+                      color:
+                        COLORS.textMuted,
+
+                      fontSize: 14,
+                    }}
+                  >
+                    🎉 لا يوجد مستخدمون تنتهي اشتراكاتهم قريبًا.
+                  </div>
+                ) : (
+                  <UserTable
+                    users={users
+                      .filter(
+                        (u) => {
+                          const now = new Date();
+                          const t = new Date(
+                            now.getTime() +
+                              7 * 24 * 60 * 60 * 1000
+                          );
+                          return (
+                            u.isActive !== false &&
+                            u.subscriptionExpiresAt &&
+                            new Date(u.subscriptionExpiresAt) > now &&
+                            new Date(u.subscriptionExpiresAt) <= t
+                          );
+                        }
+                      )
+                      .slice(0, 5)}
+
+                    compact
+
+                    onExtend={
+                      handleExtendSubscription
+                    }
+
+                    onDisable={
+                      handleDisableUser
+                    }
+
+                    onEnable={
+                      handleEnableUser
+                    }
+
+                    onLogoutAll={
+                      handleLogoutAll
+                    }
+
+                    onDelete={
+                      handleDeleteUser
+                    }
+
+                    showActions={
+                      false
+                    }
+                  />
+                )}
+              </section>
+
             </>
 
           )}
@@ -2613,6 +3727,74 @@ export default function App() {
                   fetchAllAdminData
                 }
               />
+
+              {/* 🔔 عدّادات سريعة للاشتراكات */}
+              <div
+                style={{
+                  display: "grid",
+
+                  gridTemplateColumns:
+                    "repeat(auto-fit, minmax(160px, 1fr))",
+
+                  gap: 11,
+
+                  marginBottom: 16,
+                }}
+              >
+                <StatCard
+                  label="اشتراك نشط"
+                  value={
+                    users.filter(
+                      (u) =>
+                        u.isActive !== false &&
+                        u.subscriptionExpiresAt &&
+                        new Date(
+                          u.subscriptionExpiresAt
+                        ) > new Date()
+                    ).length
+                  }
+                  icon="✓"
+                  color={COLORS.success}
+                />
+
+                <StatCard
+                  label="⏳ ينتهي خلال 7 أيام"
+                  value={
+                    users.filter(
+                      (u) => {
+                        const now = new Date();
+                        const t = new Date(
+                          now.getTime() +
+                            7 * 24 * 60 * 60 * 1000
+                        );
+                        return (
+                          u.isActive !== false &&
+                          u.subscriptionExpiresAt &&
+                          new Date(u.subscriptionExpiresAt) > now &&
+                          new Date(u.subscriptionExpiresAt) <= t
+                        );
+                      }
+                    ).length
+                  }
+                  icon="⏳"
+                  color="#f5a742"
+                />
+
+                <StatCard
+                  label="منتهي الاشتراك"
+                  value={
+                    users.filter(
+                      (u) =>
+                        u.subscriptionExpiresAt &&
+                        new Date(
+                          u.subscriptionExpiresAt
+                        ) <= new Date()
+                    ).length
+                  }
+                  icon="✕"
+                  color={COLORS.danger}
+                />
+              </div>
 
               <section
                 className="qd-card"
@@ -2722,6 +3904,10 @@ export default function App() {
                         نشط
                       </option>
 
+                      <option value="expiring">
+                        ⏳ قريب الانتهاء (7 أيام)
+                      </option>
+
                       <option value="expired">
                         منتهي الاشتراك
                       </option>
@@ -2747,6 +3933,25 @@ export default function App() {
                       }{" "}
                       نتيجة
                     </span>
+
+                    <button
+                      type="button"
+
+                      onClick={exportUsers}
+
+                      className="qd-btn"
+                      style={{
+                        minHeight: 40,
+                        padding: "9px 15px",
+                        background: "rgba(112,165,255,.12)",
+                        color: COLORS.blue,
+                        border: `1px solid ${COLORS.blue}55`,
+                        whiteSpace: "nowrap",
+                        fontWeight: 700,
+                      }}
+                    >
+                      📥 تصدير Excel
+                    </button>
 
                   </div>
 
@@ -2775,6 +3980,10 @@ export default function App() {
 
                   onDelete={
                     handleDeleteUser
+                  }
+
+                  onViewDetail={
+                    openUserDetail
                   }
 
                   showActions
@@ -3129,30 +4338,107 @@ export default function App() {
 
                   </div>
 
-                  <input
-                    className="qd-field"
-
-                    value={
-                      codeSearch
-                    }
-
-                    onChange={(e) =>
-                      setCodeSearch(
-                        e.target.value
-                      )
-                    }
-
-                    placeholder="ابحث عن كود..."
-
+                  <div
                     style={{
-                      width: 280,
-
-                      padding:
-                        "10px 14px",
-
-                      borderRadius: 11,
+                      display: "flex",
+                      gap: 10,
+                      alignItems: "center",
                     }}
-                  />
+                  >
+                    <button
+                      type="button"
+
+                      onClick={() => {
+                        const unusedCodes = codes
+                          .filter((c) => !c.used)
+                          .map((c) => c.code);
+
+                        if (unusedCodes.length === 0) {
+                          showToast("لا توجد أكواد متاحة للنسخ", "error");
+                          return;
+                        }
+
+                        const text = unusedCodes.join("\n");
+
+                        if (navigator.clipboard?.writeText) {
+                          navigator.clipboard
+                            .writeText(text)
+                            .then(() =>
+                              showToast(`تم نسخ ${unusedCodes.length} كود`)
+                            )
+                            .catch(() => showToast("تعذر النسخ", "error"));
+                        } else {
+                          const ta = document.createElement("textarea");
+                          ta.value = text;
+                          document.body.appendChild(ta);
+                          ta.select();
+                          try {
+                            document.execCommand("copy");
+                            showToast(`تم نسخ ${unusedCodes.length} كود`);
+                          } catch {
+                            showToast("تعذر النسخ", "error");
+                          }
+                          document.body.removeChild(ta);
+                        }
+                      }}
+
+                      className="qd-btn"
+                      style={{
+                        minHeight: 40,
+                        padding: "9px 16px",
+                        background: "rgba(232,185,63,.12)",
+                        color: COLORS.gold,
+                        border: `1px solid ${COLORS.gold}55`,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      📋 نسخ كل الأكواد ({codes.filter((c) => !c.used).length})
+                    </button>
+
+                    <button
+                      type="button"
+
+                      onClick={exportCodes}
+
+                      className="qd-btn"
+                      style={{
+                        minHeight: 40,
+                        padding: "9px 15px",
+                        background: "rgba(112,165,255,.12)",
+                        color: COLORS.blue,
+                        border: `1px solid ${COLORS.blue}55`,
+                        whiteSpace: "nowrap",
+                        fontWeight: 700,
+                      }}
+                    >
+                      📥 تصدير Excel
+                    </button>
+
+                    <input
+                      className="qd-field"
+
+                      value={
+                        codeSearch
+                      }
+
+                      onChange={(e) =>
+                        setCodeSearch(
+                          e.target.value
+                        )
+                      }
+
+                      placeholder="ابحث عن كود..."
+
+                      style={{
+                        width: 280,
+
+                        padding:
+                          "10px 14px",
+
+                        borderRadius: 11,
+                      }}
+                    />
+                  </div>
 
                 </div>
 
@@ -3413,6 +4699,266 @@ export default function App() {
                 showToast
               }
             />
+
+          )}
+
+          {/* =================================================
+              ACTIVITIES (سجل إجراءات الأدمن)
+          ================================================= */}
+
+          {activePage ===
+            "activities" && (
+
+            <>
+
+              <PageHeader
+                title="سجل النشاطات"
+
+                description="إجراءات الأدمن المسجلة على المنصة"
+
+                loading={
+                  activitiesLoading
+                }
+
+                onRefresh={
+                  fetchActivities
+                }
+              />
+
+              <section
+                className="qd-card"
+
+                style={{
+                  background:
+                    COLORS.bgPanel,
+
+                  border:
+                    `1px solid ${COLORS.border}`,
+
+                  borderRadius: 17,
+
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  className="qd-scroll"
+
+                  style={{
+                    overflowX: "auto",
+                  }}
+                >
+                  <table
+                    style={{
+                      width: "100%",
+
+                      minWidth: 700,
+
+                      borderCollapse:
+                        "collapse",
+                    }}
+                  >
+                    <thead>
+                      <tr
+                        style={{
+                          borderBottom:
+                            `1px solid ${COLORS.border}`,
+                        }}
+                      >
+                        <th style={thStyle}>الإجراء</th>
+                        <th style={thStyle}>الهدف</th>
+                        <th style={thStyle}>التفاصيل</th>
+                        <th style={thStyle}>الوقت</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {activities.map((act) => (
+                        <tr
+                          key={act.id}
+                          className="qd-row"
+                          style={{
+                            borderBottom: "1px solid #232b37",
+                          }}
+                        >
+                          <td style={tdStyle}>
+                            <span
+                              style={{
+                                color: COLORS.gold,
+                                fontWeight: 700,
+                              }}
+                            >
+                              {act.action}
+                            </span>
+                          </td>
+
+                          <td style={tdStyle}>
+                            {act.target || "—"}
+                          </td>
+
+                          <td
+                            style={{
+                              ...tdStyle,
+                              fontSize: 12,
+                              color: COLORS.textMuted,
+                              maxWidth: 260,
+                              whiteSpace: "normal",
+                              wordBreak: "break-word",
+                            }}
+                          >
+                            {act.details || "—"}
+                          </td>
+
+                          <td
+                            style={{
+                              ...tdStyle,
+                              direction: "ltr",
+                              textAlign: "right",
+                              fontSize: 12,
+                            }}
+                          >
+                            {formatDate(act.createdAt)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {activities.length === 0 && (
+                    <EmptyState text="لا توجد نشاطات" />
+                  )}
+                </div>
+              </section>
+
+            </>
+
+          )}
+
+          {/* =================================================
+              SESSIONS (الجلسات النشطة)
+          ================================================= */}
+
+          {activePage ===
+            "sessions" && (
+
+            <>
+
+              <PageHeader
+                title="الجلسات النشطة"
+
+                description={`${sessionsList.length} جلسة نشطة الآن`}
+
+                loading={
+                  sessionsLoading
+                }
+
+                onRefresh={
+                  fetchSessions
+                }
+              />
+
+              <section
+                className="qd-card"
+
+                style={{
+                  background:
+                    COLORS.bgPanel,
+
+                  border:
+                    `1px solid ${COLORS.border}`,
+
+                  borderRadius: 17,
+
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  className="qd-scroll"
+
+                  style={{
+                    overflowX: "auto",
+                  }}
+                >
+                  <table
+                    style={{
+                      width: "100%",
+
+                      minWidth: 700,
+
+                      borderCollapse:
+                        "collapse",
+                    }}
+                  >
+                    <thead>
+                      <tr
+                        style={{
+                          borderBottom:
+                            `1px solid ${COLORS.border}`,
+                        }}
+                      >
+                        <th style={thStyle}>المستخدم</th>
+                        <th style={thStyle}>البريد</th>
+                        <th style={thStyle}>بدأت</th>
+                        <th style={thStyle}>تنتهي</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {sessionsList.map((s) => (
+                        <tr
+                          key={s.id}
+                          className="qd-row"
+                          style={{
+                            borderBottom: "1px solid #232b37",
+                          }}
+                        >
+                          <td style={tdStyle}>
+                            {s.user?.name || "بدون اسم"}
+                          </td>
+
+                          <td
+                            style={{
+                              ...tdStyle,
+                              direction: "ltr",
+                              textAlign: "right",
+                            }}
+                          >
+                            {s.user?.email || "—"}
+                          </td>
+
+                          <td
+                            style={{
+                              ...tdStyle,
+                              direction: "ltr",
+                              textAlign: "right",
+                              fontSize: 12,
+                            }}
+                          >
+                            {formatDate(s.createdAt)}
+                          </td>
+
+                          <td
+                            style={{
+                              ...tdStyle,
+                              direction: "ltr",
+                              textAlign: "right",
+                              fontSize: 12,
+                              color: COLORS.textMuted,
+                            }}
+                          >
+                            {formatDate(s.expiresAt)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {sessionsList.length === 0 && (
+                    <EmptyState text="لا توجد جلسات نشطة" />
+                  )}
+                </div>
+              </section>
+
+            </>
 
           )}
 
@@ -3779,7 +5325,7 @@ function StatCard({
   color = COLORS.gold,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   icon: string;
   color?: string;
 }) {
@@ -4121,6 +5667,7 @@ function UserTable({
   onEnable,
   onLogoutAll,
   onDelete,
+  onViewDetail,
   showActions = false,
 }: {
   users: UserType[];
@@ -4144,6 +5691,10 @@ function UserTable({
   ) => void;
 
   onDelete: (
+    id: string
+  ) => void;
+
+  onViewDetail?: (
     id: string
   ) => void;
 
@@ -4201,6 +5752,14 @@ function UserTable({
             <th style={thStyle}>
               الاشتراك
             </th>
+
+            {!compact && (
+
+              <th style={thStyle}>
+                آخر دخول
+              </th>
+
+            )}
 
             {!compact && (
 
@@ -4391,9 +5950,65 @@ function UserTable({
 
                         )}
 
+                        {user.subscriptionExpiresAt && (() => {
+                          const now = new Date();
+                          const end = new Date(user.subscriptionExpiresAt);
+                          const remainingMs = end.getTime() - now.getTime();
+                          const remainingDays = Math.ceil(remainingMs / (1000 * 3600 * 24));
+
+                          if (remainingDays <= 0) {
+                            return (
+                              <span
+                                style={{
+                                  color: COLORS.danger,
+                                  fontSize: 12,
+                                  fontWeight: 800,
+                                }}
+                              >
+                                ✕ منتهي
+                              </span>
+                            );
+                          }
+
+                          const isSoon = remainingDays <= 7;
+
+                          return (
+                            <span
+                              style={{
+                                color: isSoon ? "#f5a742" : COLORS.success,
+                                fontSize: 12,
+                                fontWeight: 800,
+                              }}
+                            >
+                              {isSoon ? "⏳" : "✓"}{" "}
+                              باقي {remainingDays}{" "}
+                              يوم
+                            </span>
+                          );
+                        })()}
+
                       </div>
 
                     </td>
+
+                    {!compact && (
+
+                      <td
+                        style={{
+                          ...tdStyle,
+
+                          color:
+                            COLORS.textMuted,
+                        }}
+                      >
+                        {user.lastLoginAt
+                          ? formatDate(
+                              user.lastLoginAt
+                            )
+                          : "لم يسجل"}
+                      </td>
+
+                    )}
 
                     {!compact && (
 
@@ -4477,8 +6092,8 @@ function UserTable({
                       <td
                         colSpan={
                           showActions
-                            ? 6
-                            : 5
+                            ? 7
+                            : 6
                         }
 
                         style={{
@@ -4625,6 +6240,24 @@ function UserTable({
                           >
                             حذف المستخدم
                           </ActionButton>
+
+                          {onViewDetail && (
+
+                            <ActionButton
+                              color={
+                                COLORS.blue
+                              }
+
+                              onClick={() =>
+                                onViewDetail(
+                                  user.id
+                                )
+                              }
+                            >
+                              📋 سجل النشاط
+                            </ActionButton>
+
+                          )}
 
                         </div>
 

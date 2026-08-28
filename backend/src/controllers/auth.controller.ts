@@ -248,6 +248,12 @@ export async function loginDirect(
 
   const session = await createSession(request.server.prisma, user.id);
 
+  // ✅ تحديث آخر تسجيل دخول (يظهر في لوحة التحكم)
+  await request.server.prisma.user.update({
+    where: { id: user.id },
+    data: { lastLoginAt: new Date() },
+  });
+
   reply.setCookie("rhal_session", session.token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -381,6 +387,12 @@ export async function verifyLogin(
   });
 
   const session = await createSession(request.server.prisma, user.id);
+
+  // ✅ تحديث آخر تسجيل دخول
+  await request.server.prisma.user.update({
+    where: { id: user.id },
+    data: { lastLoginAt: new Date() },
+  });
 
   reply.setCookie("rhal_session", session.token, {
     httpOnly: true,

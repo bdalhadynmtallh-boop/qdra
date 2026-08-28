@@ -18,6 +18,8 @@ import {
   Table as TableIcon,
   Download,
   Eye,
+  X,
+  FileText,
 } from "lucide-react";
 import { cn } from "../utils/cn";
 import { useAuth } from "../context/AuthContext";
@@ -3671,6 +3673,9 @@ export default function BasicsPage() {
    */
   const [quizAnswers, setQuizAnswers] = useState<Record<string, number>>({});
 
+  /** 🖥️ عارض كتاب التأسيس داخل الصفحة (بدل فتح نافذة) */
+  const [showBookViewer, setShowBookViewer] = useState<boolean>(false);
+
   /* =======================================================
      جلب الدروس المكتملة من السيرفر
   ======================================================= */
@@ -4010,16 +4015,15 @@ export default function BasicsPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* زر عرض الكتاب */}
-            <a
-              href="/book.pdf"
-              target="_blank"
-              rel="noopener noreferrer"
+            {/* زر عرض الكتاب — يفتح العارض داخل الصفحة (لا يمنعه المتصفح) */}
+            <button
+              type="button"
+              onClick={() => setShowBookViewer(true)}
               className="press flex items-center gap-1.5 rounded-xl border border-gold-500/40 bg-gold-500/20 px-3 py-1.5 text-xs font-extrabold text-gold-300 hover:bg-gold-500/30"
             >
               <Eye size={14} />
               عرض الكتاب
-            </a>
+            </button>
 
             {/* زر تحميل الكتاب */}
             <a
@@ -5037,6 +5041,56 @@ export default function BasicsPage() {
         </div>
 
       </div>
+
+      {/* 🖥️ عارض كتاب التأسيس داخل الصفحة */}
+      {showBookViewer && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-black/90 backdrop-blur-sm"
+          style={{ padding: "env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px)" }}
+          onClick={() => setShowBookViewer(false)}
+        >
+          {/* الشريط العلوي */}
+          <div
+            className="flex items-center justify-between gap-3 px-4 py-3"
+            onClick={(e) => e.stopPropagation()}
+            style={{ borderBottom: "1px solid rgba(255,255,255,0.1)" }}
+          >
+            <div className="flex min-w-0 items-center gap-2 text-ink-100">
+              <BookOpen size={18} className="shrink-0 text-gold-400" />
+              <span className="truncate text-sm font-bold">كتاب التأسيس في القدرات اللفظية</span>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-2">
+              <a
+                href="/book.pdf"
+                download="كتاب التأسيس في القدرات اللفظية.pdf"
+                onClick={(e) => e.stopPropagation()}
+                className="press flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/20 px-3 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/30"
+              >
+                <Download size={14} />
+                تحميل
+              </a>
+
+              <button
+                onClick={() => setShowBookViewer(false)}
+                className="press flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-ink-200 hover:bg-white/15"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+
+          {/* PDF */}
+          <div className="min-h-0 flex-1" onClick={(e) => e.stopPropagation()}>
+            <iframe
+              src="/book.pdf"
+              title="كتاب التأسيس في القدرات اللفظية"
+              className="h-full w-full"
+              style={{ border: 0 }}
+            />
+          </div>
+        </div>
+      )}
 
     </div>
   );

@@ -405,6 +405,50 @@ export async function adminRoutes(app: FastifyInstance) {
                 createdAt: true,
               },
             },
+
+            stats: true,
+
+            _count: {
+              select: {
+                questionAttempts: true,
+                simulatorAttempts: true,
+                favorites: true,
+              },
+            },
+
+            questionAttempts: {
+              orderBy: {
+                createdAt: "desc",
+              },
+
+              take: 20,
+
+              select: {
+                id: true,
+                questionId: true,
+                sectionId: true,
+                isCorrect: true,
+                createdAt: true,
+              },
+            },
+
+            simulatorAttempts: {
+              orderBy: {
+                createdAt: "desc",
+              },
+
+              take: 10,
+
+              select: {
+                id: true,
+                totalQuestions: true,
+                correctAnswers: true,
+                wrongAnswers: true,
+                score: true,
+                completedAt: true,
+                createdAt: true,
+              },
+            },
           },
         });
 
