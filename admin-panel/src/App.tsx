@@ -521,13 +521,8 @@ export default function App() {
   const [email, setEmail] =
     useState("");
 
-  const [otp, setOtp] =
+  const [password, setPassword] =
     useState("");
-
-  const [step, setStep] =
-    useState<"email" | "otp">(
-      "email"
-    );
 
   const [
     authLoading,
@@ -712,60 +707,13 @@ export default function App() {
 
         const response =
           await api.post(
-            "/api/auth/login",
-            {
-              email:
-                email.trim(),
-            }
-          );
-
-        if (
-          response.data.success
-        ) {
-          setStep("otp");
-        } else {
-          setAuthError(
-            response.data.message ||
-              "تعذر إرسال رمز التحقق"
-          );
-        }
-
-      } catch (error: any) {
-
-        setAuthError(
-          error.response?.data
-            ?.message ||
-            "خطأ في إرسال رمز التحقق."
-        );
-
-      } finally {
-
-        setAuthLoading(false);
-
-      }
-    };
-
-  const handleVerifyOtp =
-    async (
-      event: React.FormEvent
-    ) => {
-
-      event.preventDefault();
-
-      setAuthLoading(true);
-      setAuthError("");
-
-      try {
-
-        const response =
-          await api.post(
-            "/api/auth/verify-login",
+            "/api/auth/login-direct",
             {
               email:
                 email.trim(),
 
-              code:
-                otp.trim(),
+              password:
+                password,
             }
           );
 
@@ -786,14 +734,13 @@ export default function App() {
             true
           );
 
-          setStep("email");
-          setOtp("");
+          setPassword("");
 
         } else {
 
           setAuthError(
             response.data.message ||
-              "رمز التحقق غير صحيح."
+              "تعذر تسجيل الدخول"
           );
 
         }
@@ -803,7 +750,7 @@ export default function App() {
         setAuthError(
           error.response?.data
             ?.message ||
-            "رمز التحقق غير صحيح."
+            "خطأ في تسجيل الدخول."
         );
 
       } finally {
@@ -812,12 +759,6 @@ export default function App() {
 
       }
     };
-
-  const backToEmail = () => {
-    setStep("email");
-    setOtp("");
-    setAuthError("");
-  };
 
   /* =========================================================
      FETCH ADMIN DATA
@@ -1312,9 +1253,7 @@ export default function App() {
       setCurrentUser(null);
 
       setEmail("");
-      setOtp("");
-
-      setStep("email");
+      setPassword("");
 
       setAuthError("");
 
@@ -1568,193 +1507,104 @@ export default function App() {
                 fontSize: 14,
               }}
             >
-              {step ===
-              "email"
-                ? "أدخل بريد المدير للمتابعة"
-                : "أدخل رمز التحقق المرسل إلى بريدك"}
+              أدخل بريد المدير وكلمة المرور
             </p>
 
           </div>
 
-          {step ===
-          "email" ? (
+          <form
+            onSubmit={
+              handleLogin
+            }
 
-            <form
-              onSubmit={
-                handleLogin
+            style={{
+              display: "grid",
+              gap: 14,
+            }}
+          >
+
+            <input
+              className="qd-field"
+
+              type="email"
+
+              value={email}
+
+              onChange={(e) =>
+                setEmail(
+                  e.target.value
+                )
               }
 
+              placeholder="البريد الإلكتروني"
+
+              required
+
+              dir="ltr"
+
+              autoComplete="username"
+
               style={{
-                display: "grid",
-                gap: 14,
+                width: "100%",
+
+                padding:
+                  "13px 15px",
+
+                borderRadius: 12,
               }}
-            >
+            />
 
-              <input
-                className="qd-field"
+            <input
+              className="qd-field"
 
-                type="email"
+              type="password"
 
-                value={email}
+              value={password}
 
-                onChange={(e) =>
-                  setEmail(
-                    e.target.value
-                  )
-                }
-
-                placeholder="البريد الإلكتروني"
-
-                required
-
-                dir="ltr"
-
-                style={{
-                  width: "100%",
-
-                  padding:
-                    "13px 15px",
-
-                  borderRadius: 12,
-                }}
-              />
-
-              <button
-                type="submit"
-
-                disabled={
-                  authLoading
-                }
-
-                className="qd-btn qd-btn-gold"
-
-                style={{
-                  minHeight: 50,
-                  fontSize: 15,
-                }}
-              >
-                {authLoading
-                  ? "جاري إرسال الرمز..."
-                  : "إرسال رمز التحقق"}
-              </button>
-
-            </form>
-
-          ) : (
-
-            <form
-              onSubmit={
-                handleVerifyOtp
+              onChange={(e) =>
+                setPassword(
+                  e.target.value
+                )
               }
 
+              placeholder="كلمة المرور"
+
+              required
+
+              dir="ltr"
+
+              autoComplete="current-password"
+
               style={{
-                display: "grid",
-                gap: 14,
+                width: "100%",
+
+                padding:
+                  "13px 15px",
+
+                borderRadius: 12,
+              }}
+            />
+
+            <button
+              type="submit"
+
+              disabled={
+                authLoading
+              }
+
+              className="qd-btn qd-btn-gold"
+
+              style={{
+                minHeight: 50,
+                fontSize: 15,
               }}
             >
+              {authLoading
+                ? "جاري تسجيل الدخول..."
+                : "دخول إلى لوحة التحكم"}
+            </button>
 
-              <input
-                className="qd-field"
-
-                type="text"
-
-                maxLength={6}
-
-                inputMode="numeric"
-
-                value={otp}
-
-                onChange={(e) =>
-                  setOtp(
-                    e.target.value
-                      .replace(
-                        /\D/g,
-                        ""
-                      )
-                      .slice(0, 6)
-                  )
-                }
-
-                placeholder="000000"
-
-                required
-
-                dir="ltr"
-
-                autoFocus
-
-                style={{
-                  width: "100%",
-
-                  padding: 14,
-
-                  borderRadius: 12,
-
-                  textAlign:
-                    "center",
-
-                  fontSize: 26,
-
-                  fontWeight: 700,
-
-                  letterSpacing: 8,
-                }}
-              />
-
-              <button
-                type="submit"
-
-                disabled={
-                  authLoading ||
-                  otp.length !== 6
-                }
-
-                className="qd-btn qd-btn-gold"
-
-                style={{
-                  minHeight: 50,
-                  fontSize: 15,
-                }}
-              >
-                {authLoading
-                  ? "جاري التحقق..."
-                  : "دخول إلى لوحة التحكم"}
-              </button>
-
-              <button
-                type="button"
-
-                onClick={
-                  backToEmail
-                }
-
-                style={{
-                  border: 0,
-
-                  background:
-                    "transparent",
-
-                  color:
-                    COLORS.textMuted,
-
-                  cursor:
-                    "pointer",
-
-                  padding: 8,
-
-                  fontSize: 14,
-
-                  fontFamily:
-                    "inherit",
-                }}
-              >
-                تغيير البريد
-                الإلكتروني
-              </button>
-
-            </form>
-
-          )}
+          </form>
 
           {authError && (
 

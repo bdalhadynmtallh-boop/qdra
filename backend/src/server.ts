@@ -55,6 +55,11 @@ await app.register(cors, {
       cb(null, true);
       return;
     }
+    // قبول أي منفذ localhost أثناء التطوير (localhost:5173, 5174, 4173...)
+    if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      cb(null, true);
+      return;
+    }
     if (process.env.NODE_ENV !== "production") {
       cb(null, true);
       return;
