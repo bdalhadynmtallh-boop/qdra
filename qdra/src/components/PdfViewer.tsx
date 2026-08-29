@@ -3,39 +3,30 @@ import { Loader2, ChevronRight, ChevronLeft } from "lucide-react";
 
 /* =========================================================
    عارض PDF يعمل على كل الأجهزة (اندرويد / ايفون / ويندوز)
-   ⚡ يركّب pdf.js تلقائياً من CDN أثناء التشغيل
+   ⚡ يستخدم pdf.js إصدار حديث (6.2) يدعم العربية بشكل ممتاز
+   — ملفات المكتبة محفوظة داخل المشروع (public/pdfjs)
    — لا يحتاج تثبيت أي مكتبة (npm install) إطلاقاً
+   — لا يعتمد على CDN خارجي (لا يمنعه CSP/الحماية)
 ========================================================= */
 
-// إصدار pdf.js الذي سنحمّله من CDN
-const PDFJS_VERSION = "3.11.174";
-const PDFJS_CDN_BASE = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/";
-const PDFJS_SCRIPT = `${PDFJS_CDN_BASE}${PDFJS_VERSION}/pdf.min.js`;
-const PDFJS_WORKER = `${PDFJS_CDN_BASE}${PDFJS_VERSION}/pdf.worker.min.js`;
+// ملفات pdf.js الحديثة محفوظة داخل المشروع في public/pdfjs
+const PDFJS_MODULE = "/pdfjs/pdf.min.mjs";
+const PDFJS_WORKER = "/pdfjs/pdf.worker.min.mjs";
 
-// تحميل مكتبة pdf.js من CDN (مرة واحدة فقط)
+// تحميل مكتبة pdf.js من نفس الموقع (مرة واحدة فقط)
 let pdfjsPromise: Promise<any> | null = null;
 function loadPdfjs(): Promise<any> {
-  if (typeof window !== "undefined" && (window as any).pdfjsLib) {
-    return Promise.resolve((window as any).pdfjsLib);
+  if (typeof window !== "undefined" && (window as any).__qdraPdfjs) {
+    return Promise.resolve((window as any).__qdraPdfjs);
   }
   if (!pdfjsPromise) {
-    pdfjsPromise = new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = PDFJS_SCRIPT;
-      script.async = true;
-      script.onload = () => {
-        const lib = (window as any).pdfjsLib;
-        if (lib) {
-          lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-          resolve(lib);
-        } else {
-          reject(new Error("تعذر تحميل مكتبة PDF"));
-        }
-      };
-      script.onerror = () => reject(new Error("فشل تحميل مكتبة PDF من CDN"));
-      document.head.appendChild(script);
-    });
+    pdfjsPromise = (async () => {
+      // استيراد ديناميكي من ملف محلي (يعمل في المتصفح مباشرة)
+      const mod = await import(/* @vite-ignore */ PDFJS_MODULE);
+      mod.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+      (window as any).__qdraPdfjs = mod;
+      return mod;
+    })();
   }
   return pdfjsPromise;
 }
