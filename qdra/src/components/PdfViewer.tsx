@@ -1,35 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, ChevronRight, ChevronLeft } from "lucide-react";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 /* =========================================================
    عارض PDF يعمل على كل الأجهزة (اندرويد / ايفون / ويندوز)
-   ⚡ يستخدم pdf.js إصدار حديث (6.2) يدعم العربية بشكل ممتاز
-   — ملفات المكتبة محفوظة داخل المشروع (public/pdfjs)
-   — لا يحتاج تثبيت أي مكتبة (npm install) إطلاقاً
-   — لا يعتمد على CDN خارجي (لا يمنعه CSP/الحماية)
+   ⚡ pdf.js إصدار حديث (6.2) يدعم العربية بشكل ممتاز
+   — يُدمج في بناء Vite مباشرة (مضمون 100%)
+   — لا يعتمد على CDN خارجي أو ملفات public
 ========================================================= */
 
-// ملفات pdf.js الحديثة محفوظة داخل المشروع في public/pdfjs
-const PDFJS_MODULE = "/pdfjs/pdf.min.mjs";
-const PDFJS_WORKER = "/pdfjs/pdf.worker.min.mjs";
-
-// تحميل مكتبة pdf.js من نفس الموقع (مرة واحدة فقط)
-let pdfjsPromise: Promise<any> | null = null;
-function loadPdfjs(): Promise<any> {
-  if (typeof window !== "undefined" && (window as any).__qdraPdfjs) {
-    return Promise.resolve((window as any).__qdraPdfjs);
-  }
-  if (!pdfjsPromise) {
-    pdfjsPromise = (async () => {
-      // استيراد ديناميكي من ملف محلي (يعمل في المتصفح مباشرة)
-      const mod = await import(/* @vite-ignore */ PDFJS_MODULE);
-      mod.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-      (window as any).__qdraPdfjs = mod;
-      return mod;
-    })();
-  }
-  return pdfjsPromise;
-}
+// ربط الـ worker (يُعالج بواسطة Vite تلقائياً)
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 interface PdfViewerProps {
   /** الرابط blob: أو data: أو مسار للـ PDF */
@@ -46,7 +28,6 @@ export default function PdfViewer({ url, title = "" }: PdfViewerProps) {
   const [error, setError] = useState<string | null>(null);
 
   const docRef = useRef<any>(null);
-  const pdfjsRef = useRef<any>(null);
   const renderingRef = useRef(false);
   const pendingRef = useRef<number | null>(null);
 
@@ -60,10 +41,7 @@ export default function PdfViewer({ url, title = "" }: PdfViewerProps) {
 
     const run = async () => {
       try {
-        const pdfjs = await loadPdfjs();
-        pdfjsRef.current = pdfjs;
-        if (cancelled) return;
-        const doc = await pdfjs.getDocument(url).promise;
+        const doc = await pdfjsLib.getDocument({ url }).promise;
         if (cancelled) return;
         docRef.current = doc;
         setNumPages(doc.numPages);
@@ -71,7 +49,7 @@ export default function PdfViewer({ url, title = "" }: PdfViewerProps) {
       } catch (e) {
         console.error("فشل تحميل PDF:", e);
         if (!cancelled) {
-          setError("تعذر عرض الملف على هذا الجهاز. تأكد من اتصال الإنترنت ثم أعد المحاولة.");
+          setError("تعذر عرض الملف على هذا الجهاز. أعد المحاولة.");
           setLoading(false);
         }
       }
@@ -92,9 +70,8 @@ export default function PdfViewer({ url, title = "" }: PdfViewerProps) {
   // رسم الصفحة الحالية
   const renderPage = (pageNumber: number) => {
     const doc = docRef.current;
-    const pdfjs = pdfjsRef.current;
     const canvas = canvasRef.current;
-    if (!doc || !pdfjs || !canvas) return;
+    if (!doc || !canvas) return;
 
     if (renderingRef.current) {
       pendingRef.current = pageNumber;
