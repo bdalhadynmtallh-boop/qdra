@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { HashRouter, Routes, Route } from "react-router-dom";
+import { HashRouter, Routes, Route, useLocation } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 
 import { AppDataProvider } from "./context/AppDataContext";
@@ -20,10 +20,25 @@ import MistakesPage from "./pages/MistakesPage";
 import FavoritesPage from "./pages/FavoritesPage";
 import StatsPage from "./pages/StatsPage";
 import AuthPage from "./pages/AuthPage";
+import LegalPage from "./pages/LegalPage";
+
+/* 🧾 صفحة سياسة قانونية عامة — متاحة دائماً (قبل حالة تسجيل الدخول) */
+const LEGAL_ROUTES: Record<string, "privacy" | "terms" | "refund"> = {
+  "/privacy": "privacy",
+  "/terms": "terms",
+  "/refund": "refund",
+};
 
 function AppContent() {
   const { user, loading, subscriptionExpired } = useAuth();
   const [showAuth, setShowAuth] = useState(false);
+
+  // 📄 إذا كان المسار الحالي سياسة قانونية، اعرضها مباشرة دون أي قيود
+  const location = useLocation();
+  const legalType = LEGAL_ROUTES[location.pathname];
+  if (legalType) {
+    return <LegalPage type={legalType} />;
+  }
 
   if (loading) {
     return (

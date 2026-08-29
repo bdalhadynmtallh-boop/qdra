@@ -166,6 +166,15 @@ export default function Layout({ children }: { children: ReactNode }) {
               {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             </div>
           </button>
+
+          {/* 🧾 روابط السياسات للمسجلين */}
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-white/10 pt-3 text-[11px] font-semibold text-ink-400">
+            <a href="#/privacy" className="transition hover:text-gold-300">الخصوصية</a>
+            <span className="opacity-40">•</span>
+            <a href="#/terms" className="transition hover:text-gold-300">الشروط</a>
+            <span className="opacity-40">•</span>
+            <a href="#/refund" className="transition hover:text-gold-300">الاسترجاع</a>
+          </div>
         </div>
       </aside>
 
@@ -271,6 +280,15 @@ export default function Layout({ children }: { children: ReactNode }) {
                   تسجيل الدخول
                 </NavLink>
               )}
+
+              {/* 🧾 روابط السياسات للجوال */}
+              <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-white/10 pt-3 text-[11px] font-semibold text-ink-400">
+                <a href="#/privacy" onClick={() => setIsMoreOpen(false)} className="transition hover:text-gold-300">الخصوصية</a>
+                <span className="opacity-40">•</span>
+                <a href="#/terms" onClick={() => setIsMoreOpen(false)} className="transition hover:text-gold-300">الشروط</a>
+                <span className="opacity-40">•</span>
+                <a href="#/refund" onClick={() => setIsMoreOpen(false)} className="transition hover:text-gold-300">الاسترجاع</a>
+              </div>
             </div>
           </div>
         </div>

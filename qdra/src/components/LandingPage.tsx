@@ -1406,6 +1406,30 @@ export default function LandingPage({
             © 2026 منصة قُدْرَة — للقسم اللفظي
           </p>
 
+          {/* 🧾 روابط السياسات */}
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs font-semibold">
+            <a
+              href="#/privacy"
+              className={`transition hover:opacity-70 ${theme.softMuted}`}
+            >
+              سياسة الخصوصية
+            </a>
+            <span className={`${theme.softMuted} opacity-40`}>•</span>
+            <a
+              href="#/terms"
+              className={`transition hover:opacity-70 ${theme.softMuted}`}
+            >
+              الأحكام والشروط
+            </a>
+            <span className={`${theme.softMuted} opacity-40`}>•</span>
+            <a
+              href="#/refund"
+              className={`transition hover:opacity-70 ${theme.softMuted}`}
+            >
+              سياسة الاسترجاع
+            </a>
+          </div>
+
           <button
             type="button"
             onClick={() =>
