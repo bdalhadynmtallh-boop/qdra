@@ -24,7 +24,6 @@ import {
 import { cn } from "../utils/cn";
 import { useAuth } from "../context/AuthContext";
 import { getCompletedBasics, toggleBasicLesson } from "../auth/api";
-import PdfViewer from "../components/PdfViewer";
 
 /* =========================================================
    نوع بيانات الدرس
@@ -5081,9 +5080,14 @@ export default function BasicsPage() {
             </div>
           </div>
 
-          {/* PDF — عارض مضمون على كل الأجهزة (اندرويد/ايفون/ويندوز) */}
+          {/* PDF */}
           <div className="min-h-0 flex-1" onClick={(e) => e.stopPropagation()}>
-            <PdfViewer url="/book.pdf" title="كتاب التأسيس في القدرات اللفظية" />
+            <iframe
+              src="/book.pdf"
+              title="كتاب التأسيس في القدرات اللفظية"
+              className="h-full w-full"
+              style={{ border: 0 }}
+            />
           </div>
         </div>
       )}

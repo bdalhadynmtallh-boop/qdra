@@ -1,7 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { FileText, CheckCircle, Search, FolderOpen, AlertCircle, Loader2, X, Download } from "lucide-react";
 import { getStoredToken } from "../auth/api";
-import PdfViewer from "../components/PdfViewer";
 
 // ========================================
 // 🌐 منطق API URL الموحد (نفس api.ts)
@@ -388,9 +387,14 @@ export default function FilesPage() {
             </div>
           </div>
 
-          {/* PDF — عارض مضمون على كل الأجهزة (اندرويد/ايفون/ويندوز) */}
+          {/* PDF */}
           <div className="min-h-0 flex-1" onClick={(e) => e.stopPropagation()}>
-            <PdfViewer url={pdfViewer.url} title={pdfViewer.title} />
+            <iframe
+              src={pdfViewer.url}
+              title={pdfViewer.title}
+              className="h-full w-full"
+              style={{ border: 0 }}
+            />
           </div>
         </div>
       )}
