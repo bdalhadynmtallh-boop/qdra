@@ -43,6 +43,9 @@ import { FastifyInstance } from "fastify";
    - medium للأسئلة العميقة
    - maxOutputTokens مناسب
    - timeout مستقل لكل نموذج
+   - Cache لملف الطالب (90 ثانية)
+   - تشغيل ملف الطالب وإحصائيات المنصة بالتوازي
+   - timeout أقصر لكل نموذج (12 ثانية بدل 30)
 ========================================================= */
 
 // =========================================================
@@ -167,6 +170,43 @@ let questionIndexCache:
 let questionIndexRefreshPromise:
   | Promise<QuestionIndexCache>
   | null = null;
+
+// =========================================================
+// ⚡ Cache ملف الطالب
+// =========================================================
+
+const STUDENT_PROFILE_TTL_MS = 90 * 1000; // 90 ثانية
+
+interface CachedStudentProfile {
+  at: number;
+  profile: InternalStudentProfile | null;
+}
+
+const studentProfileCache =
+  new Map<string, CachedStudentProfile>();
+
+setInterval(
+  () => {
+    const now = Date.now();
+
+    for (
+      const [
+        userId,
+        cached,
+      ] of studentProfileCache.entries()
+    ) {
+      if (
+        now - cached.at >
+        STUDENT_PROFILE_TTL_MS
+      ) {
+        studentProfileCache.delete(
+          userId
+        );
+      }
+    }
+  },
+  5 * 60 * 1000
+).unref?.();
 
 // =========================================================
 // 📊 عداد الاستخدام
@@ -1566,6 +1606,44 @@ async function buildStudentProfile(
 }
 
 // =========================================================
+// ⚡ ملف الطالب مع Cache
+// =========================================================
+
+async function getCachedStudentProfile(
+  app: FastifyInstance,
+  userId: string
+): Promise<InternalStudentProfile | null> {
+  const cached =
+    studentProfileCache.get(
+      userId
+    );
+
+  if (
+    cached &&
+    Date.now() - cached.at <
+      STUDENT_PROFILE_TTL_MS
+  ) {
+    return cached.profile;
+  }
+
+  const profile =
+    await buildStudentProfile(
+      app,
+      userId
+    );
+
+  studentProfileCache.set(
+    userId,
+    {
+      at: Date.now(),
+      profile,
+    }
+  );
+
+  return profile;
+}
+
+// =========================================================
 // 📚 سؤال مشابه
 // =========================================================
 
@@ -2913,20 +2991,26 @@ export async function aiRoutes(
       }
 
       // =====================================================
-      // 🧠 قراءة نتائج الطالب الحقيقية
+      // 🧠 قراءة نتائج الطالب الحقيقية + إحصائيات المنصة
+      //     (بالتوازي بدل التتابع)
       // =====================================================
+
+      const profileStartedAt =
+        Date.now();
+
+      const statsPromise =
+        getPlatformStats(
+          app
+        );
 
       let internalProfile:
         | InternalStudentProfile
         | null =
         null;
 
-      const profileStartedAt =
-        Date.now();
-
       try {
         internalProfile =
-          await buildStudentProfile(
+          await getCachedStudentProfile(
             app,
             userId
           );
@@ -3098,9 +3182,7 @@ ${internalProfile.weaknesses.join(
 
       try {
         const stats =
-          await getPlatformStats(
-            app
-          );
+          await statsPromise;
 
         dynamicSystemPrompt +=
           PLATFORM_KNOWLEDGE
@@ -3257,7 +3339,7 @@ const payload = {
         Number(
           process.env
             .GEMINI_REQUEST_TIMEOUT_MS ||
-            30000
+            12000
         );
 
       let fullAssistantText =
