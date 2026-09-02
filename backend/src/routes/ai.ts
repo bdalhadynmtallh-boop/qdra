@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 
 /* =========================================================
-   🎓 المعلم الذكي في قُدرة — معلم شخصي متكيف
+   🎓 المعلم الذكي في قُدرة — معلم شخصي متكيف وسريع
 
    ترتيب النماذج:
    1) Gemini 3.7 Flash      — 20 طلباً يومياً
@@ -10,17 +10,39 @@ import { FastifyInstance } from "fastify";
    4) Gemini 3.5 Flash Lite — 500 طلب يومياً
    5) Gemini 3.1 Flash Lite — 500 طلب يومياً
 
-   المميزات:
-   - Adaptive Teaching حسب مستوى الطالب
-   - قراءة أداء الطالب الحقيقي من QuestionAttempt
-   - تحليل الأداء حسب category
-   - الاعتماد على الأداء الحديث في كل مهارة
-   - تخصيص حسب المهارة الحالية
-   - شرح تأسيسي للطالب المتعثر
-   - شرح مختصر للطالب المتمكن
-   - إعادة شرح بطريقة أبسط عند عدم الفهم
-   - منع اختراع الأسئلة والخيارات
-   - Failover تلقائي بين 5 نماذج
+   =========================================================
+   المميزات المحفوظة:
+   - Adaptive Teaching
+   - تحليل أداء الطالب الحقيقي
+   - تحليل حسب category
+   - الأداء الحديث أهم من القديم
+   - معرفة نقاط القوة والضعف
+   - شرح تأسيسي
+   - شرح متدرج
+   - شرح مختصر
+   - شرح متقدم
+   - إعادة الشرح
+   - منع اختراع الأسئلة
+   - منع اختراع الخيارات
+   - الاعتماد على الإجابة المؤكدة
+   - استيعاب المقروء
+   - سؤال مشابه من البنك
+   - اختبار تفاعلي
+   - حفظ المحادثة
+   - Failover تلقائي
+   - Streaming
+
+   =========================================================
+   تحسينات السرعة:
+   - Cache لبنك الأسئلة
+   - عدم قراءة sections/questions مع كل رسالة
+   - عدم البحث في كل بنك الأسئلة عند كل passage
+   - قراءة آخر 300 محاولة للطالب فقط
+   - نفس إعداد التفكير لكل النماذج
+   - low للأسئلة العادية
+   - medium للأسئلة العميقة
+   - maxOutputTokens مناسب
+   - timeout مستقل لكل نموذج
 ========================================================= */
 
 // =========================================================
@@ -58,6 +80,10 @@ const MODEL_31_LITE_DAILY_CAP = Number(
 );
 
 const QUOTA_WARNING_THRESHOLD = 0.9;
+
+// =========================================================
+// 🌐 Gemini Streaming URL
+// =========================================================
 
 const GEMINI_STREAM_URL_FOR = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
@@ -98,27 +124,87 @@ const RECENT_SKILL_ATTEMPT_LIMIT = 20;
 const MIN_SKILL_SAMPLE = 8;
 
 // =========================================================
+// ⚡ Cache بنك الأسئلة
+// =========================================================
+
+const QUESTION_INDEX_TTL_MS =
+  10 * 60 * 1000;
+
+interface CachedQuestionMeta {
+  category: string;
+  passage: string;
+}
+
+interface CachedBankQuestion {
+  question: string;
+  options: string[];
+  correctIndex: number;
+  category?: string;
+  explanation?: string;
+  passage?: string;
+}
+
+interface QuestionIndexCache {
+  at: number;
+
+  questionMeta: Map<
+    string,
+    CachedQuestionMeta
+  >;
+
+  sectionCategory: Map<
+    number,
+    string
+  >;
+
+  allQuestions: CachedBankQuestion[];
+}
+
+let questionIndexCache:
+  | QuestionIndexCache
+  | null = null;
+
+let questionIndexRefreshPromise:
+  | Promise<QuestionIndexCache>
+  | null = null;
+
+// =========================================================
 // 📊 عداد الاستخدام
 // =========================================================
 
 function pacificDateKey(): string {
-  return new Date().toLocaleDateString("en-CA", {
-    timeZone: "America/Los_Angeles",
-  });
+  return new Date().toLocaleDateString(
+    "en-CA",
+    {
+      timeZone:
+        "America/Los_Angeles",
+    }
+  );
 }
 
-const usageCounters = new Map<string, number>();
+const usageCounters =
+  new Map<string, number>();
 
-function incrementUsage(model: string): number {
-  const key = `${pacificDateKey()}:${model}`;
-  const next = (usageCounters.get(key) || 0) + 1;
+function incrementUsage(
+  model: string
+): number {
+  const key =
+    `${pacificDateKey()}:${model}`;
 
-  usageCounters.set(key, next);
+  const next =
+    (usageCounters.get(key) || 0) + 1;
+
+  usageCounters.set(
+    key,
+    next
+  );
 
   return next;
 }
 
-function getUsage(model: string): number {
+function getUsage(
+  model: string
+): number {
   return (
     usageCounters.get(
       `${pacificDateKey()}:${model}`
@@ -132,7 +218,8 @@ function isModelNearCap(
 ): boolean {
   return (
     getUsage(model) >=
-    cap * QUOTA_WARNING_THRESHOLD
+    cap *
+      QUOTA_WARNING_THRESHOLD
   );
 }
 
@@ -140,36 +227,77 @@ function isModelAtCap(
   model: string,
   cap: number
 ): boolean {
-  return getUsage(model) >= cap;
+  return (
+    getUsage(model) >= cap
+  );
 }
 
-setInterval(() => {
-  const todayKey = pacificDateKey();
+setInterval(
+  () => {
+    const todayKey =
+      pacificDateKey();
 
-  for (const key of usageCounters.keys()) {
-    if (!key.startsWith(todayKey)) {
-      usageCounters.delete(key);
+    for (
+      const key of
+        usageCounters.keys()
+    ) {
+      if (
+        !key.startsWith(
+          todayKey
+        )
+      ) {
+        usageCounters.delete(
+          key
+        );
+      }
     }
-  }
-}, 60 * 60 * 1000).unref?.();
+  },
+  60 * 60 * 1000
+).unref?.();
 
 // =========================================================
-// 🧠 التفكير العميق
+// 🧠 التفكير
+//
+// مهم:
+// جميع النماذج تستخدم نفس المستويات.
+//
+// عادي      → low
+// عميق      → medium
+//
+// لا يوجد نموذج يحصل على إعداد مختلف.
 // =========================================================
 
-const DEEP_REASONING_CATEGORIES = new Set([
-  "استيعاب المقروء",
-  "الخطأ السياقي",
-]);
+const NORMAL_THINKING_LEVEL =
+  "low" as const;
+
+const DEEP_THINKING_LEVEL =
+  "medium" as const;
+
+function getThinkingLevel(
+  useDeepReasoning: boolean
+): "low" | "medium" {
+  return useDeepReasoning
+    ? DEEP_THINKING_LEVEL
+    : NORMAL_THINKING_LEVEL;
+}
+
+const DEEP_REASONING_CATEGORIES =
+  new Set([
+    "استيعاب المقروء",
+    "الخطأ السياقي",
+  ]);
 
 // =========================================================
 // 🚦 Rate Limiting
 // =========================================================
 
-const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const RATE_LIMIT_WINDOW_MS =
+  60 * 60 * 1000;
+
 const RATE_LIMIT_MAX_REQUESTS = 30;
 
-const rateLimitStore = new Map<string, number[]>();
+const rateLimitStore =
+  new Map<string, number[]>();
 
 function checkRateLimit(
   userId: string
@@ -177,15 +305,19 @@ function checkRateLimit(
   allowed: boolean;
   remaining: number;
 } {
-  const now = Date.now();
+  const now =
+    Date.now();
 
-  const timestamps = (
-    rateLimitStore.get(userId) || []
-  ).filter(
-    (t) =>
-      now - t <
-      RATE_LIMIT_WINDOW_MS
-  );
+  const timestamps =
+    (
+      rateLimitStore.get(
+        userId
+      ) || []
+    ).filter(
+      (t) =>
+        now - t <
+        RATE_LIMIT_WINDOW_MS
+    );
 
   if (
     timestamps.length >=
@@ -202,7 +334,9 @@ function checkRateLimit(
     };
   }
 
-  timestamps.push(now);
+  timestamps.push(
+    now
+  );
 
   rateLimitStore.set(
     userId,
@@ -211,39 +345,46 @@ function checkRateLimit(
 
   return {
     allowed: true,
-
     remaining:
       RATE_LIMIT_MAX_REQUESTS -
       timestamps.length,
   };
 }
 
-setInterval(() => {
-  const now = Date.now();
+setInterval(
+  () => {
+    const now =
+      Date.now();
 
-  for (
-    const [
-      userId,
-      timestamps,
-    ] of rateLimitStore.entries()
-  ) {
-    const fresh =
-      timestamps.filter(
-        (t) =>
-          now - t <
-          RATE_LIMIT_WINDOW_MS
-      );
-
-    if (fresh.length === 0) {
-      rateLimitStore.delete(userId);
-    } else {
-      rateLimitStore.set(
+    for (
+      const [
         userId,
-        fresh
-      );
+        timestamps,
+      ] of rateLimitStore.entries()
+    ) {
+      const fresh =
+        timestamps.filter(
+          (t) =>
+            now - t <
+            RATE_LIMIT_WINDOW_MS
+        );
+
+      if (
+        fresh.length === 0
+      ) {
+        rateLimitStore.delete(
+          userId
+        );
+      } else {
+        rateLimitStore.set(
+          userId,
+          fresh
+        );
+      }
     }
-  }
-}, 15 * 60 * 1000).unref?.();
+  },
+  15 * 60 * 1000
+).unref?.();
 
 // =========================================================
 // 🧩 الاختبار المعلق
@@ -259,7 +400,10 @@ interface PendingQuiz {
 }
 
 const pendingQuizStore =
-  new Map<string, PendingQuiz>();
+  new Map<
+    string,
+    PendingQuiz
+  >();
 
 const lastCategoryStore =
   new Map<string, string>();
@@ -271,7 +415,9 @@ function getPendingQuiz(
   userId: string
 ): PendingQuiz | null {
   const pending =
-    pendingQuizStore.get(userId);
+    pendingQuizStore.get(
+      userId
+    );
 
   if (!pending) {
     return null;
@@ -282,7 +428,9 @@ function getPendingQuiz(
       pending.createdAt >
     PENDING_QUIZ_TTL_MS
   ) {
-    pendingQuizStore.delete(userId);
+    pendingQuizStore.delete(
+      userId
+    );
 
     return null;
   }
@@ -317,18 +465,23 @@ function matchStudentAnswer(
 
     if (
       idx >= 0 &&
-      idx < pending.options.length &&
+      idx <
+        pending.options.length &&
       trimmed.length <= 6
     ) {
       return idx;
     }
   }
 
-  if (trimmed.length <= 8) {
+  if (
+    trimmed.length <= 8
+  ) {
     for (
       let i = 0;
-      i < ARABIC_LETTERS.length &&
-      i < pending.options.length;
+      i <
+        ARABIC_LETTERS.length &&
+      i <
+        pending.options.length;
       i++
     ) {
       if (
@@ -349,7 +502,8 @@ function matchStudentAnswer(
 
   for (
     let i = 0;
-    i < pending.options.length;
+    i <
+      pending.options.length;
     i++
   ) {
     const opt =
@@ -363,7 +517,9 @@ function matchStudentAnswer(
       normalized &&
       (
         normalized === opt ||
-        normalized.includes(opt)
+        normalized.includes(
+          opt
+        )
       )
     ) {
       return i;
@@ -397,6 +553,7 @@ interface SkillStat {
 
 interface InternalStudentProfile {
   skills: SkillStat[];
+
   strengths: string[];
   weaknesses: string[];
 
@@ -413,7 +570,10 @@ function normalizeCategory(
 ): string {
   return String(value || "")
     .trim()
-    .replace(/\s+/g, " ");
+    .replace(
+      /\s+/g,
+      " "
+    );
 }
 
 function findCurrentSkill(
@@ -425,7 +585,9 @@ function findCurrentSkill(
   }
 
   const wanted =
-    normalizeCategory(category);
+    normalizeCategory(
+      category
+    );
 
   const exact =
     skills.find(
@@ -439,24 +601,30 @@ function findCurrentSkill(
     return exact;
   }
 
-  return skills.find((skill) => {
-    const name =
-      normalizeCategory(
-        skill.name
+  return skills.find(
+    (skill) => {
+      const name =
+        normalizeCategory(
+          skill.name
+        );
+
+      if (
+        !name ||
+        !wanted
+      ) {
+        return false;
+      }
+
+      return (
+        name.includes(
+          wanted
+        ) ||
+        wanted.includes(
+          name
+        )
       );
-
-    if (
-      !name ||
-      !wanted
-    ) {
-      return false;
     }
-
-    return (
-      name.includes(wanted) ||
-      wanted.includes(name)
-    );
-  });
+  );
 }
 
 // =========================================================
@@ -464,7 +632,9 @@ function findCurrentSkill(
 // =========================================================
 
 function determineTeachingDepth(
-  profile: InternalStudentProfile | null,
+  profile:
+    | InternalStudentProfile
+    | null,
   category?: string
 ): {
   depth: TeachingDepth;
@@ -489,17 +659,23 @@ function determineTeachingDepth(
 
   if (
     skill &&
-    skill.total >= MIN_SKILL_SAMPLE
+    skill.total >=
+      MIN_SKILL_SAMPLE
   ) {
-    if (skill.accuracy < 60) {
+    if (
+      skill.accuracy < 60
+    ) {
       return {
-        depth: "foundation",
+        depth:
+          "foundation",
         skill,
         source: "skill",
       };
     }
 
-    if (skill.accuracy < 80) {
+    if (
+      skill.accuracy < 80
+    ) {
       return {
         depth: "guided",
         skill,
@@ -507,7 +683,9 @@ function determineTeachingDepth(
       };
     }
 
-    if (skill.accuracy < 90) {
+    if (
+      skill.accuracy < 90
+    ) {
       return {
         depth: "concise",
         skill,
@@ -523,17 +701,23 @@ function determineTeachingDepth(
   }
 
   if (
-    profile.solvedQuestions >= 15
+    profile.solvedQuestions >=
+    15
   ) {
-    if (profile.accuracy < 60) {
+    if (
+      profile.accuracy < 60
+    ) {
       return {
-        depth: "foundation",
+        depth:
+          "foundation",
         skill,
         source: "general",
       };
     }
 
-    if (profile.accuracy < 80) {
+    if (
+      profile.accuracy < 80
+    ) {
       return {
         depth: "guided",
         skill,
@@ -541,7 +725,9 @@ function determineTeachingDepth(
       };
     }
 
-    if (profile.accuracy < 90) {
+    if (
+      profile.accuracy < 90
+    ) {
       return {
         depth: "concise",
         skill,
@@ -562,6 +748,10 @@ function determineTeachingDepth(
     source: "unknown",
   };
 }
+
+// =========================================================
+// 📚 تعليمات التدريس
+// =========================================================
 
 function buildTeachingInstruction(
   depth: TeachingDepth
@@ -808,6 +998,10 @@ const PLATFORM_KNOWLEDGE = `
 - إذا سئلت عن معلومة غير موجودة هنا، فلا تخترعها.
 `;
 
+// =========================================================
+// 📊 إحصائيات المنصة
+// =========================================================
+
 let platformStatsCache: {
   sections: number;
   questions: number;
@@ -843,15 +1037,16 @@ async function getPlatformStats(
 
     let questions = 0;
 
-    for (const s of sections) {
+    for (const section of sections) {
       if (
         Array.isArray(
-          s.questions
+          section.questions
         )
       ) {
-        questions += (
-          s.questions as any[]
-        ).length;
+        questions +=
+          (
+            section.questions as any[]
+          ).length;
       }
     }
 
@@ -863,13 +1058,15 @@ async function getPlatformStats(
 
       at: Date.now(),
     };
-  } catch (e) {
+  } catch (error) {
     console.error(
       "platform stats error:",
-      e
+      error
     );
 
-    if (!platformStatsCache) {
+    if (
+      !platformStatsCache
+    ) {
       platformStatsCache = {
         sections: 0,
         questions: 0,
@@ -879,6 +1076,205 @@ async function getPlatformStats(
   }
 
   return platformStatsCache;
+}
+
+// =========================================================
+// ⚡ بناء فهرس الأسئلة
+// =========================================================
+
+async function refreshQuestionIndex(
+  app: FastifyInstance
+): Promise<QuestionIndexCache> {
+  if (
+    questionIndexRefreshPromise
+  ) {
+    return questionIndexRefreshPromise;
+  }
+
+  questionIndexRefreshPromise =
+    (async () => {
+      try {
+        const sections =
+          await app.prisma.section.findMany({
+            where: {
+              isActive:
+                true,
+            },
+
+            select: {
+              id: true,
+              name: true,
+              category: true,
+              type: true,
+              questions: true,
+            },
+          });
+
+        const questionMeta =
+          new Map<
+            string,
+            CachedQuestionMeta
+          >();
+
+        const sectionCategory =
+          new Map<
+            number,
+            string
+          >();
+
+        const allQuestions:
+          CachedBankQuestion[] =
+          [];
+
+        for (
+          const section of sections
+        ) {
+          const fallbackCategory =
+            normalizeCategory(
+              section.category ||
+                section.type ||
+                section.name ||
+                `قسم ${section.id}`
+            );
+
+          sectionCategory.set(
+            section.id,
+            fallbackCategory
+          );
+
+          const questions =
+            Array.isArray(
+              section.questions
+            )
+              ? section.questions
+              : [];
+
+          for (
+            const question of
+              questions as any[]
+          ) {
+            if (
+              !question ||
+              !question.question
+            ) {
+              continue;
+            }
+
+            const text =
+              String(
+                question.question
+              );
+
+            const category =
+              normalizeCategory(
+                question.category ||
+                  fallbackCategory
+              );
+
+            const passage =
+              String(
+                question.passage ||
+                  question.context ||
+                  question.passageText ||
+                  question.readingPassage ||
+                  question.paragraph ||
+                  ""
+              ).trim();
+
+            questionMeta.set(
+              text,
+              {
+                category,
+                passage,
+              }
+            );
+
+            allQuestions.push({
+              question:
+                text,
+
+              options:
+                Array.isArray(
+                  question.options
+                )
+                  ? question.options
+                  : [],
+
+              correctIndex:
+                typeof question.correctIndex ===
+                "number"
+                  ? question.correctIndex
+                  : 0,
+
+              category,
+
+              explanation:
+                question.explanation,
+
+              passage,
+            });
+          }
+        }
+
+        const result:
+          QuestionIndexCache = {
+          at: Date.now(),
+
+          questionMeta,
+
+          sectionCategory,
+
+          allQuestions,
+        };
+
+        questionIndexCache =
+          result;
+
+        console.log(
+          `[AI cache] Question index refreshed: ${allQuestions.length} questions`
+        );
+
+        return result;
+      } finally {
+        questionIndexRefreshPromise =
+          null;
+      }
+    })();
+
+  return questionIndexRefreshPromise;
+}
+
+async function getQuestionIndex(
+  app: FastifyInstance
+): Promise<QuestionIndexCache> {
+  if (
+    questionIndexCache &&
+    Date.now() -
+      questionIndexCache.at <
+      QUESTION_INDEX_TTL_MS
+  ) {
+    return questionIndexCache;
+  }
+
+  return refreshQuestionIndex(
+    app
+  );
+}
+
+function getCachedQuestionMeta(
+  questionText: string
+): CachedQuestionMeta | undefined {
+  return questionIndexCache?.questionMeta.get(
+    questionText
+  );
+}
+
+function getCachedSectionCategory(
+  sectionId: number
+): string | undefined {
+  return questionIndexCache?.sectionCategory.get(
+    sectionId
+  );
 }
 
 // =========================================================
@@ -894,16 +1290,21 @@ function classifySkill(
   | "ضعف"
   | "غير كافٍ" {
   if (
-    total < MIN_SKILL_SAMPLE
+    total <
+    MIN_SKILL_SAMPLE
   ) {
     return "غير كافٍ";
   }
 
-  if (accuracy >= 90) {
+  if (
+    accuracy >= 90
+  ) {
     return "قوة";
   }
 
-  if (accuracy < 70) {
+  if (
+    accuracy < 70
+  ) {
     return "ضعف";
   }
 
@@ -918,12 +1319,13 @@ async function buildStudentProfile(
   app: FastifyInstance,
   userId: string
 ): Promise<InternalStudentProfile | null> {
-  const attempts: Array<{
-    sectionId: number;
-    questionId: string;
-    isCorrect: boolean;
-    createdAt: Date;
-  }> =
+  const attempts:
+    Array<{
+      sectionId: number;
+      questionId: string;
+      isCorrect: boolean;
+      createdAt: Date;
+    }> =
     await app.prisma.questionAttempt.findMany({
       where: {
         userId,
@@ -938,10 +1340,17 @@ async function buildStudentProfile(
         STUDENT_PROFILE_ATTEMPT_LIMIT,
 
       select: {
-        sectionId: true,
-        questionId: true,
-        isCorrect: true,
-        createdAt: true,
+        sectionId:
+          true,
+
+        questionId:
+          true,
+
+        isCorrect:
+          true,
+
+        createdAt:
+          true,
       },
     });
 
@@ -951,86 +1360,17 @@ async function buildStudentProfile(
     return null;
   }
 
-  const sectionIds = [
-    ...new Set(
-      attempts.map(
-        (attempt) =>
-          attempt.sectionId
-      )
-    ),
-  ];
+  /*
+    إذا لم يكن الـ cache جاهزاً بعد،
+    نبنيه مرة واحدة فقط.
+  */
 
-  const sections =
-    await app.prisma.section.findMany({
-      where: {
-        id: {
-          in: sectionIds,
-        },
-      },
-
-      select: {
-        id: true,
-        name: true,
-        category: true,
-        type: true,
-        questions: true,
-      },
-    });
-
-  const questionCategory =
-    new Map<string, string>();
-
-  const sectionCategory =
-    new Map<number, string>();
-
-  for (const section of sections) {
-    const fallbackCategory =
-      normalizeCategory(
-        section.category ||
-          section.type ||
-          section.name ||
-          `قسم ${section.id}`
-      );
-
-    sectionCategory.set(
-      section.id,
-      fallbackCategory
+  if (
+    !questionIndexCache
+  ) {
+    await getQuestionIndex(
+      app
     );
-
-    const questions =
-      Array.isArray(
-        section.questions
-      )
-        ? section.questions
-        : [];
-
-    for (
-      const question of questions as Array<{
-        id?: string | number;
-        category?: string;
-      }>
-    ) {
-      if (
-        !question ||
-        question.id ===
-          undefined
-      ) {
-        continue;
-      }
-
-      const category =
-        normalizeCategory(
-          question.category ||
-            fallbackCategory
-        );
-
-      questionCategory.set(
-        String(
-          question.id
-        ),
-        category
-      );
-    }
   }
 
   const attemptsBySkill =
@@ -1042,15 +1382,20 @@ async function buildStudentProfile(
       }>
     >();
 
-  for (const attempt of attempts) {
+  for (
+    const attempt of attempts
+  ) {
+    const meta =
+      getCachedQuestionMeta(
+        String(
+          attempt.questionId
+        )
+      );
+
     const category =
       normalizeCategory(
-        questionCategory.get(
-          String(
-            attempt.questionId
-          )
-        ) ||
-          sectionCategory.get(
+        meta?.category ||
+          getCachedSectionCategory(
             attempt.sectionId
           ) ||
           `قسم ${attempt.sectionId}`
@@ -1105,7 +1450,8 @@ async function buildStudentProfile(
             (
               recentCorrect /
               recentTotal
-            ) * 100
+            ) *
+              100
           )
         : 0;
 
@@ -1124,7 +1470,8 @@ async function buildStudentProfile(
             (
               historicalCorrect /
               historicalTotal
-            ) * 100
+            ) *
+              100
           )
         : 0;
 
@@ -1161,7 +1508,8 @@ async function buildStudentProfile(
           classifySkill(
             skill.accuracy,
             skill.total
-          ) === "قوة"
+          ) ===
+          "قوة"
       )
       .map(
         (skill) =>
@@ -1175,7 +1523,8 @@ async function buildStudentProfile(
           classifySkill(
             skill.accuracy,
             skill.total
-          ) === "ضعف"
+          ) ===
+          "ضعف"
       )
       .map(
         (skill) =>
@@ -1197,13 +1546,16 @@ async function buildStudentProfile(
           (
             totalCorrect /
             total
-          ) * 100
+          ) *
+            100
         )
       : 0;
 
   return {
     skills,
+
     strengths,
+
     weaknesses,
 
     solvedQuestions:
@@ -1231,77 +1583,26 @@ async function fetchSimilarQuestion(
   category?: string,
   excludeText?: string
 ): Promise<BankQuestion | null> {
-  const sections =
-    await app.prisma.section.findMany({
-      where: {
-        isActive: true,
-      },
+  const index =
+    await getQuestionIndex(
+      app
+    );
 
-      select: {
-        id: true,
-        name: true,
-        category: true,
-        type: true,
-        questions: true,
-      },
-
-      take: 40,
-    });
-
-  const all: Array<{
-    question: any;
-    sectionId: number;
-    effectiveCategory: string;
-  }> = [];
-
-  for (const sec of sections) {
-    if (
-      Array.isArray(
-        sec.questions
-      )
-    ) {
-      for (
-        const q of sec.questions as any[]
-      ) {
-        if (
-          q &&
-          q.question
-        ) {
-          const effectiveCategory =
-            normalizeCategory(
-              q.category ||
-                sec.category ||
-                sec.type ||
-                sec.name ||
-                `قسم ${sec.id}`
-            );
-
-          all.push({
-            question: q,
-
-            sectionId:
-              sec.id,
-
-            effectiveCategory,
-          });
-        }
-      }
-    }
-  }
-
-  let pool = all;
+  let pool =
+    index.allQuestions;
 
   if (category) {
-    const normalizedWanted =
+    const wanted =
       normalizeCategory(
         category
       );
 
     const exact =
-      all.filter(
-        (x) =>
-          x.effectiveCategory ===
-          normalizedWanted
+      pool.filter(
+        (item) =>
+          normalizeCategory(
+            item.category
+          ) === wanted
       );
 
     if (
@@ -1310,29 +1611,31 @@ async function fetchSimilarQuestion(
       pool = exact;
     } else {
       pool =
-        all.filter(
-          (x) =>
-            x.effectiveCategory.includes(
-              normalizedWanted
-            ) ||
-            normalizedWanted.includes(
-              x.effectiveCategory
-            )
-        );
-    }
+        pool.filter(
+          (item) => {
+            const itemCategory =
+              normalizeCategory(
+                item.category
+              );
 
-    if (
-      pool.length === 0
-    ) {
-      return null;
+            return (
+              itemCategory.includes(
+                wanted
+              ) ||
+              wanted.includes(
+                itemCategory
+              )
+            );
+          }
+        );
     }
   }
 
   if (excludeText) {
     pool =
       pool.filter(
-        (x) =>
-          x.question.question !==
+        (item) =>
+          item.question !==
           excludeText
       );
   }
@@ -1343,7 +1646,7 @@ async function fetchSimilarQuestion(
     return null;
   }
 
-  const pick =
+  const picked =
     pool[
       Math.floor(
         Math.random() *
@@ -1353,34 +1656,30 @@ async function fetchSimilarQuestion(
 
   return {
     question:
-      pick.question.question,
+      picked.question,
 
     options:
       Array.isArray(
-        pick.question.options
+        picked.options
       )
-        ? pick.question.options
+        ? picked.options
         : [],
 
     correctIndex:
-      typeof pick.question.correctIndex ===
+      typeof picked.correctIndex ===
       "number"
-        ? pick.question.correctIndex
+        ? picked.correctIndex
         : 0,
 
     category:
-      pick.effectiveCategory,
+      picked.category,
 
     explanation:
-      pick.question.explanation,
+      picked.explanation,
 
     passage:
       String(
-        pick.question.passage ||
-          pick.question.context ||
-          pick.question.passageText ||
-          pick.question.readingPassage ||
-          pick.question.paragraph ||
+        picked.passage ||
           ""
       ),
   };
@@ -1481,10 +1780,10 @@ async function loadRecentConversation(
     }
 
     return convo;
-  } catch (e) {
+  } catch (error) {
     console.error(
       "loadRecentConversation error:",
-      e
+      error
     );
 
     return null;
@@ -1528,10 +1827,10 @@ async function saveConversationTurn(
         },
       });
     }
-  } catch (e) {
+  } catch (error) {
     console.error(
       "saveConversationTurn error:",
-      e
+      error
     );
   }
 }
@@ -1543,6 +1842,21 @@ async function saveConversationTurn(
 export async function aiRoutes(
   app: FastifyInstance
 ) {
+  // =======================================================
+  // ⚡ بناء الـCache في الخلفية
+  // =======================================================
+
+  refreshQuestionIndex(
+    app
+  ).catch(
+    (error) => {
+      console.error(
+        "Initial question cache error:",
+        error
+      );
+    }
+  );
+
   // =======================================================
   // CORS
   // =======================================================
@@ -1558,7 +1872,7 @@ export async function aiRoutes(
         request.headers.origin ||
         "*";
 
-      reply
+      return reply
         .header(
           "Access-Control-Allow-Origin",
           origin
@@ -1600,13 +1914,14 @@ export async function aiRoutes(
       request,
       reply
     ) => {
-      const user = (
-        request as any
-      ).user as
-        | {
-            id?: string;
-          }
-        | undefined;
+      const user =
+        (
+          request as any
+        ).user as
+          | {
+              id?: string;
+            }
+          | undefined;
 
       const userId =
         user?.id;
@@ -1641,7 +1956,7 @@ export async function aiRoutes(
   );
 
   // =======================================================
-  // QUOTA STATUS — جميع النماذج
+  // QUOTA STATUS
   // =======================================================
 
   app.get(
@@ -1680,7 +1995,6 @@ export async function aiRoutes(
               remaining:
                 Math.max(
                   0,
-
                   cap -
                     getUsage(
                       model
@@ -1708,13 +2022,14 @@ export async function aiRoutes(
       request,
       reply
     ) => {
-      const user = (
-        request as any
-      ).user as
-        | {
-            id?: string;
-          }
-        | undefined;
+      const user =
+        (
+          request as any
+        ).user as
+          | {
+              id?: string;
+            }
+          | undefined;
 
       const userId =
         user?.id;
@@ -1772,10 +2087,10 @@ export async function aiRoutes(
             rating,
           },
         });
-      } catch (e) {
+      } catch (error) {
         console.error(
           "feedback save error:",
-          e
+          error
         );
       }
 
@@ -1818,13 +2133,14 @@ export async function aiRoutes(
           });
       }
 
-      const user = (
-        request as any
-      ).user as
-        | {
-            id?: string;
-          }
-        | undefined;
+      const user =
+        (
+          request as any
+        ).user as
+          | {
+              id?: string;
+            }
+          | undefined;
 
       const userId =
         user?.id;
@@ -1952,27 +2268,34 @@ export async function aiRoutes(
           );
 
         for (
-          const m of recent
+          const message of
+            recent
         ) {
           const role =
-            m.role ===
+            message.role ===
             "assistant"
               ? "model"
               : "user";
+
+          const text =
+            String(
+              message.text ||
+                ""
+            ).slice(
+              0,
+              1500
+            );
+
+          if (!text) {
+            continue;
+          }
 
           contents.push({
             role,
 
             parts: [
               {
-                text:
-                  String(
-                    m.text ||
-                      ""
-                  ).slice(
-                    0,
-                    1500
-                  ),
+                text,
               },
             ],
           });
@@ -2005,26 +2328,26 @@ export async function aiRoutes(
         cq.question
       ) {
         currentCategory =
-          cq.category;
+          normalizeCategory(
+            cq.category
+          ) || undefined;
 
         currentQuestionText =
           cq.question;
 
         if (
-          cq.category
+          currentCategory
         ) {
           lastCategoryStore.set(
             userId,
-            String(
-              cq.category
-            )
+            currentCategory
           );
         }
 
         if (
-          cq.category &&
+          currentCategory &&
           DEEP_REASONING_CATEGORIES.has(
-            cq.category
+            currentCategory
           )
         ) {
           useDeepReasoning =
@@ -2061,9 +2384,7 @@ export async function aiRoutes(
             ? cq.passage.trim()
             : "";
 
-        if (
-          !passage
-        ) {
+        if (!passage) {
           passage =
             String(
               cq.context ||
@@ -2075,73 +2396,53 @@ export async function aiRoutes(
         }
 
         if (
-          !passage
+          !passage &&
+          cq.question
+        ) {
+          const cached =
+            getCachedQuestionMeta(
+              cq.question
+            );
+
+          if (
+            cached?.passage
+          ) {
+            passage =
+              cached.passage;
+          }
+        }
+
+        if (
+          !passage &&
+          cq.question
         ) {
           try {
-            const secs =
-              await app.prisma.section.findMany({
-                where: {
-                  isActive:
-                    true,
-                },
+            const index =
+              await getQuestionIndex(
+                app
+              );
 
-                select: {
-                  questions:
-                    true,
-                },
-              });
+            const cached =
+              index.questionMeta.get(
+                cq.question
+              );
 
-            outer: for (
-              const sec of secs
+            if (
+              cached?.passage
             ) {
-              const qs =
-                Array.isArray(
-                  sec.questions
-                )
-                  ? (
-                      sec.questions as any[]
-                    )
-                  : [];
-
-              for (
-                const q of qs
-              ) {
-                if (
-                  !q ||
-                  q.question !==
-                    cq.question
-                ) {
-                  continue;
-                }
-
-                const p =
-                  String(
-                    q.passage ||
-                      q.context ||
-                      q.passageText ||
-                      q.readingPassage ||
-                      q.paragraph ||
-                      ""
-                  ).trim();
-
-                if (p) {
-                  passage =
-                    p;
-
-                  break outer;
-                }
-              }
+              passage =
+                cached.passage;
             }
-          } catch (e) {
+          } catch (error) {
             console.error(
               "passage lookup error:",
-              e
+              error
             );
           }
         }
 
         const isReadingComprehension =
-          cq.category ===
+          currentCategory ===
             "استيعاب المقروء" ||
           passage.length >
             0;
@@ -2149,10 +2450,9 @@ export async function aiRoutes(
         const explainMsg =
           [
             `السؤال من قسم ${
-              cq.category ||
+              currentCategory ||
               "غير محدد"
             }:`,
-
             "",
 
             passage
@@ -2169,15 +2469,20 @@ export async function aiRoutes(
 
             "الخيارات الموجودة في بنك الأسئلة:",
 
-            ...cq.options.map(
+            ...(
+              Array.isArray(
+                cq.options
+              )
+                ? cq.options
+                : []
+            ).map(
               (
-                o,
-                i
+                option,
+                index
               ) =>
                 `${
-                  i +
-                  1
-                }) ${o}`
+                  index + 1
+                }) ${option}`
             ),
 
             "",
@@ -2237,9 +2542,7 @@ export async function aiRoutes(
             ""
           ).trim();
 
-        if (
-          !question
-        ) {
+        if (!question) {
           return reply
             .status(400)
             .send({
@@ -2325,13 +2628,12 @@ export async function aiRoutes(
 
                 ...pending.options.map(
                   (
-                    o,
-                    i
+                    option,
+                    index
                   ) =>
                     `${
-                      i +
-                      1
-                    }) ${o}`
+                      index + 1
+                    }) ${option}`
                 ),
 
                 "",
@@ -2390,7 +2692,6 @@ export async function aiRoutes(
             ) {
               lastCategoryStore.set(
                 userId,
-
                 String(
                   pending.category
                 )
@@ -2434,9 +2735,7 @@ export async function aiRoutes(
             const bank =
               await fetchSimilarQuestion(
                 app,
-
                 effectiveCategory,
-
                 currentQuestionText
               );
 
@@ -2478,38 +2777,48 @@ export async function aiRoutes(
                 });
               } else {
                 const trainingMessage =
-                  `الطالب يطلب سؤالاً تدريبياً. هذا سؤال حقيقي من بنك أسئلة قُدرة:\n\n` +
+                  [
+                    "الطالب يطلب سؤالاً تدريبياً.",
 
-                  (
+                    "",
+
+                    "هذا سؤال حقيقي من بنك أسئلة قُدرة.",
+
                     bankPassage
-                      ? `قطعة الاستيعاب المقروء:\n${bankPassage}\n\n`
-                      : ""
-                  ) +
+                      ? `قطعة الاستيعاب المقروء:\n${bankPassage}`
+                      : "",
 
-                  `السؤال كما هو في البنك:\n${bank.question}\n\n` +
+                    `السؤال كما هو في البنك:\n${bank.question}`,
 
-                  `الخيارات كما هي في البنك:\n${bank.options
-                    .map(
-                      (
-                        o,
-                        i
-                      ) =>
-                        `${
-                          i +
-                          1
-                        }) ${o}`
+                    `الخيارات كما هي في البنك:\n${bank.options
+                      .map(
+                        (
+                          option,
+                          index
+                        ) =>
+                          `${
+                            index + 1
+                          }) ${option}`
+                      )
+                      .join(
+                        "\n"
+                      )}`,
+
+                    "",
+                    "تعليمات:",
+                    "- اعرض السؤال كما هو.",
+                    "- اعرض الخيارات كما هي.",
+                    "- لا تغير أي كلمة.",
+                    "- لا تكشف الإجابة.",
+                    "- انتظر إجابة الطالب.",
+                    "- ممنوع اختراع سؤال آخر.",
+                  ]
+                    .filter(
+                      Boolean
                     )
                     .join(
-                      "\n"
-                    )}\n\n` +
-
-                  `تعليمات:
-- اعرض السؤال كما هو.
-- اعرض الخيارات كما هي.
-- لا تغير أي كلمة.
-- لا تكشف الإجابة.
-- انتظر إجابة الطالب.
-- ممنوع اختراع سؤال آخر.`;
+                      "\n\n"
+                    );
 
                 contents.push({
                   role:
@@ -2525,7 +2834,6 @@ export async function aiRoutes(
 
                 pendingQuizStore.set(
                   userId,
-
                   {
                     question:
                       bank.question,
@@ -2605,7 +2913,7 @@ export async function aiRoutes(
       }
 
       // =====================================================
-      // 🧠 قراءة نتائج الطالب
+      // 🧠 قراءة نتائج الطالب الحقيقية
       // =====================================================
 
       let internalProfile:
@@ -2613,18 +2921,25 @@ export async function aiRoutes(
         | null =
         null;
 
+      const profileStartedAt =
+        Date.now();
+
       try {
         internalProfile =
           await buildStudentProfile(
             app,
             userId
           );
-      } catch (e) {
+      } catch (error) {
         console.error(
           "AI profile build error:",
-          e
+          error
         );
       }
+
+      console.log(
+        `[AI profile] ${Date.now() - profileStartedAt}ms`
+      );
 
       // =====================================================
       // 🎯 المهارة الحالية
@@ -2642,7 +2957,7 @@ export async function aiRoutes(
         undefined;
 
       // =====================================================
-      // 🎯 تحديد عمق الشرح
+      // 🎯 مستوى الشرح
       // =====================================================
 
       const teaching =
@@ -2716,7 +3031,8 @@ export async function aiRoutes(
         }
 
         if (
-          internalProfile.strengths.length >
+          internalProfile.strengths
+            .length >
           0
         ) {
           dynamicSystemPrompt +=
@@ -2729,7 +3045,8 @@ ${internalProfile.strengths.join(
         }
 
         if (
-          internalProfile.weaknesses.length >
+          internalProfile.weaknesses
+            .length >
           0
         ) {
           dynamicSystemPrompt +=
@@ -2751,8 +3068,10 @@ ${internalProfile.weaknesses.join(
 استخدمها بحذر ولا تعرضها من تلقاء نفسك.
 
 الدقة العامة: ${
-            body.studentProfile
-              .accuracy != null
+            body
+              .studentProfile
+              .accuracy !=
+            null
               ? `${body.studentProfile.accuracy}%`
               : "غير معروفة"
           }
@@ -2760,7 +3079,7 @@ ${internalProfile.weaknesses.join(
       }
 
       // =====================================================
-      // 🔄 الطالب لم يفهم
+      // 🔄 إعادة الشرح
       // =====================================================
 
       if (
@@ -2778,7 +3097,7 @@ ${internalProfile.weaknesses.join(
       // =====================================================
 
       try {
-        const pStats =
+        const stats =
           await getPlatformStats(
             app
           );
@@ -2787,19 +3106,19 @@ ${internalProfile.weaknesses.join(
           PLATFORM_KNOWLEDGE
             .replace(
               "{SECTIONS_COUNT}",
-
               String(
-                pStats.sections
+                stats.sections
               )
             )
             .replace(
               "{QUESTIONS_COUNT}",
-
               String(
-                pStats.questions
+                stats.questions
               )
             );
-      } catch {}
+      } catch {
+        // لا نوقف الطلب بسبب إحصائيات المنصة
+      }
 
       // =====================================================
       // تعليمات نهائية
@@ -2821,29 +3140,31 @@ ${internalProfile.weaknesses.join(
 `;
 
       // =====================================================
-      // CONFIG
+      // ⚙️ Generation Config
+      //
+      // كل النماذج تستخدم نفس الإعداد:
+      // low  = سؤال عادي
+      // medium = سؤال يحتاج استدلالاً أعمق
+      //
+      // لا temperature.
       // =====================================================
 
-      const generationConfig: Record<
-        string,
-        any
-      > = {
-        temperature:
-          0.4,
+      const thinkingLevel =
+        getThinkingLevel(
+          useDeepReasoning
+        );
 
+      const generationConfig = {
         maxOutputTokens:
-          8192,
-      };
+          teaching.depth ===
+          "foundation"
+            ? 1800
+            : 1600,
 
-      if (
-        useDeepReasoning
-      ) {
-        generationConfig.thinkingConfig =
-          {
-            thinkingLevel:
-              "high",
-          };
-      }
+        thinkingConfig: {
+          thinkingLevel,
+        },
+      };
 
       const payload = {
         contents,
@@ -2861,19 +3182,15 @@ ${internalProfile.weaknesses.join(
       };
 
       // =====================================================
-      // 🤖 بناء قائمة النماذج المتاحة
+      // 🤖 النماذج المتاحة
       // =====================================================
 
-      const candidates: Array<{
-        model:
-          string;
-
-        url:
-          string;
-
-        cap:
-          number;
-      }> = [];
+      const candidates:
+        Array<{
+          model: string;
+          url: string;
+          cap: number;
+        }> = [];
 
       for (
         const {
@@ -2937,32 +3254,15 @@ ${internalProfile.weaknesses.join(
       }
 
       // =====================================================
-      // TIMEOUT
+      // ⏱️ Timeout
       // =====================================================
 
-      const controller =
-        new AbortController();
-
-      let timeout =
-        setTimeout(
-          () =>
-            controller.abort(),
-          90000
+      const MODEL_TIMEOUT_MS =
+        Number(
+          process.env
+            .GEMINI_REQUEST_TIMEOUT_MS ||
+            30000
         );
-
-      const kickIdle =
-        () => {
-          clearTimeout(
-            timeout
-          );
-
-          timeout =
-            setTimeout(
-              () =>
-                controller.abort(),
-              60000
-            );
-        };
 
       let fullAssistantText =
         "";
@@ -2991,31 +3291,45 @@ ${internalProfile.weaknesses.join(
       // 🔄 REQUEST + FAILOVER
       // =====================================================
 
+      let chosen =
+        candidates[0];
+
       try {
         let upstream:
           | Response
           | null =
           null;
 
-        let chosen =
-          candidates[0];
-
         let lastErrMsg =
           "";
 
         for (
-          const cand of candidates
+          const candidate of
+            candidates
         ) {
-          try {
-            console.log(
-              `[Gemini] تجربة ${cand.model} — الاستخدام ${getUsage(
-                cand.model
-              )}/${cand.cap}`
+          const controller =
+            new AbortController();
+
+          const timeout =
+            setTimeout(
+              () =>
+                controller.abort(),
+              MODEL_TIMEOUT_MS
             );
 
-            const res =
+          try {
+            const requestStartedAt =
+              Date.now();
+
+            console.log(
+              `[Gemini] تجربة ${candidate.model} | thinking=${thinkingLevel} | usage=${getUsage(
+                candidate.model
+              )}/${candidate.cap}`
+            );
+
+            const response =
               await fetch(
-                `${cand.url}&key=${apiKey}`,
+                candidate.url,
 
                 {
                   method:
@@ -3024,6 +3338,12 @@ ${internalProfile.weaknesses.join(
                   headers: {
                     "Content-Type":
                       "application/json",
+
+                    "Accept":
+                      "text/event-stream",
+
+                    "x-goog-api-key":
+                      apiKey,
                   },
 
                   body:
@@ -3036,61 +3356,100 @@ ${internalProfile.weaknesses.join(
                 }
               );
 
+            clearTimeout(
+              timeout
+            );
+
+            console.log(
+              `[Gemini] HTTP ${response.status} via ${candidate.model} in ${
+                Date.now() -
+                requestStartedAt
+              }ms`
+            );
+
             if (
-              res.ok
+              response.ok
             ) {
               upstream =
-                res;
+                response;
 
               chosen =
-                cand;
-
-              console.log(
-                `[Gemini] ✅ يعمل عبر ${cand.model}`
-              );
+                candidate;
 
               break;
             }
 
-            let errMsg =
-              res.statusText;
+            let errorMessage =
+              response.statusText;
 
             try {
-              const e =
-                await res.json();
+              const errorBody =
+                await response.json();
 
-              errMsg =
-                e?.error?.message ||
-                errMsg;
-            } catch {}
+              errorMessage =
+                errorBody
+                  ?.error
+                  ?.message ||
+                errorMessage;
+            } catch {
+              // لا شيء
+            }
 
             lastErrMsg =
-              `${res.status} ${errMsg}`;
+              `${response.status} ${errorMessage}`;
 
             console.error(
-              `[Gemini] ❌ فشل ${cand.model}:`,
-              lastErrMsg
+              `[Gemini] ❌ فشل ${candidate.model}: ${lastErrMsg}`
             );
 
-            // ينتقل للنموذج التالي تلقائياً
-            continue;
-          } catch (
-            fetchErr: any
-          ) {
-            lastErrMsg =
-              fetchErr?.message ||
-              "fetch error";
-
-            console.error(
-              `[Gemini] ❌ خطأ ${cand.model}:`,
-              lastErrMsg
-            );
+            /*
+              ننتقل للنموذج التالي
+              فقط في الأخطاء التي قد تكون
+              مؤقتة أو مرتبطة بالازدحام/الحصة.
+            */
 
             if (
-              controller.signal.aborted
+              response.status ===
+                429 ||
+              response.status ===
+                500 ||
+              response.status ===
+                502 ||
+              response.status ===
+                503 ||
+              response.status ===
+                504
             ) {
-              break;
+              continue;
             }
+
+            /*
+              400 / 401 / 403 / 404
+              غالباً مشكلة طلب أو مفتاح،
+              فلا نضيع وقت تجربة نماذج أخرى.
+            */
+
+            break;
+          } catch (error: any) {
+            clearTimeout(
+              timeout
+            );
+
+            lastErrMsg =
+              error?.name ===
+              "AbortError"
+                ? "Request timeout"
+                : error?.message ||
+                  "fetch error";
+
+            console.error(
+              `[Gemini] ❌ خطأ ${candidate.model}: ${lastErrMsg}`
+            );
+
+            /*
+              Timeout أو network error:
+              نجرب النموذج التالي.
+            */
 
             continue;
           }
@@ -3099,10 +3458,6 @@ ${internalProfile.weaknesses.join(
         if (
           !upstream
         ) {
-          clearTimeout(
-            timeout
-          );
-
           return reply
             .status(502)
             .send({
@@ -3113,8 +3468,8 @@ ${internalProfile.weaknesses.join(
                 /quota|429/i.test(
                   lastErrMsg
                 )
-                  ? "تم تجاوز حد الاستخدام اليومي. حاول مجدداً لاحقاً."
-                  : /high demand|overloaded|temporarily unavailable|503/i.test(
+                  ? "تم تجاوز حد الاستخدام. حاول مجدداً لاحقاً."
+                  : /high demand|overloaded|temporarily unavailable|503|504|timeout/i.test(
                       lastErrMsg
                     )
                   ? "الخادم مزدحم حالياً. حاول مرة أخرى بعد قليل."
@@ -3123,7 +3478,7 @@ ${internalProfile.weaknesses.join(
         }
 
         // ===================================================
-        // 📊 احتساب النموذج الذي نجح فقط
+        // 📊 احتساب النموذج الناجح
         // ===================================================
 
         const newUsage =
@@ -3136,11 +3491,26 @@ ${internalProfile.weaknesses.join(
         );
 
         console.log(
-          `[Adaptive Teaching] user=${userId} category=${effectiveCategory || "unknown"} depth=${teaching.depth} source=${teaching.source} skillAccuracy=${teaching.skill?.accuracy ?? "N/A"} skillAttempts=${teaching.skill?.total ?? 0}`
+          `[Adaptive Teaching] user=${userId} category=${
+            effectiveCategory ||
+            "unknown"
+          } depth=${
+            teaching.depth
+          } source=${
+            teaching.source
+          } skillAccuracy=${
+            teaching.skill?.accuracy ??
+            "N/A"
+          } skillAttempts=${
+            teaching.skill?.total ??
+            0
+          } thinking=${
+            thinkingLevel
+          }`
         );
 
         // ===================================================
-        // SSE
+        // 📡 SSE
         // ===================================================
 
         const origin =
@@ -3149,7 +3519,6 @@ ${internalProfile.weaknesses.join(
 
         reply.raw.writeHead(
           200,
-
           {
             "Content-Type":
               "text/event-stream; charset=utf-8",
@@ -3174,13 +3543,7 @@ ${internalProfile.weaknesses.join(
         const reader =
           upstream.body?.getReader();
 
-        if (
-          !reader
-        ) {
-          clearTimeout(
-            timeout
-          );
-
+        if (!reader) {
           return reply.raw.end();
         }
 
@@ -3195,27 +3558,20 @@ ${internalProfile.weaknesses.join(
         let emitted =
           false;
 
-        while (
-          true
-        ) {
+        while (true) {
           const {
             done,
             value,
           } =
             await reader.read();
 
-          if (
-            done
-          ) {
+          if (done) {
             break;
           }
-
-          kickIdle();
 
           buffer +=
             decoder.decode(
               value,
-
               {
                 stream:
                   true,
@@ -3224,7 +3580,7 @@ ${internalProfile.weaknesses.join(
 
           const lines =
             buffer.split(
-              "\n"
+              /\r?\n/
             );
 
           buffer =
@@ -3232,7 +3588,8 @@ ${internalProfile.weaknesses.join(
             "";
 
           for (
-            const line of lines
+            const line of
+              lines
           ) {
             const trimmed =
               line.trim();
@@ -3245,14 +3602,14 @@ ${internalProfile.weaknesses.join(
               continue;
             }
 
-            const jsonStr =
+            const jsonString =
               trimmed
                 .slice(5)
                 .trim();
 
             if (
-              !jsonStr ||
-              jsonStr ===
+              !jsonString ||
+              jsonString ===
                 "[DONE]"
             ) {
               continue;
@@ -3261,19 +3618,38 @@ ${internalProfile.weaknesses.join(
             try {
               const chunk =
                 JSON.parse(
-                  jsonStr
+                  jsonString
                 );
 
-              const piece =
+              const parts =
                 chunk
                   ?.candidates?.[0]
                   ?.content
-                  ?.parts?.[0]
-                  ?.text;
+                  ?.parts;
 
               if (
-                piece
+                !Array.isArray(
+                  parts
+                )
               ) {
+                continue;
+              }
+
+              for (
+                const part of
+                  parts
+              ) {
+                const piece =
+                  part?.text;
+
+                if (
+                  typeof piece !==
+                    "string" ||
+                  !piece
+                ) {
+                  continue;
+                }
+
                 emitted =
                   true;
 
@@ -3288,7 +3664,12 @@ ${internalProfile.weaknesses.join(
                   )}\n\n`
                 );
               }
-            } catch {}
+            } catch {
+              /*
+                إذا كان chunk غير مكتمل،
+                نتركه للـbuffer التالي.
+              */
+            }
           }
         }
 
@@ -3296,61 +3677,78 @@ ${internalProfile.weaknesses.join(
         // آخر Buffer
         // ===================================================
 
+        const lastLine =
+          buffer.trim();
+
         if (
-          buffer
-            .trim()
-            .startsWith(
-              "data:"
-            )
+          lastLine.startsWith(
+            "data:"
+          )
         ) {
-          const jsonStr =
-            buffer
-              .trim()
+          const jsonString =
+            lastLine
               .slice(5)
               .trim();
 
           if (
-            jsonStr &&
-            jsonStr !==
+            jsonString &&
+            jsonString !==
               "[DONE]"
           ) {
             try {
               const chunk =
                 JSON.parse(
-                  jsonStr
+                  jsonString
                 );
 
-              const piece =
+              const parts =
                 chunk
                   ?.candidates?.[0]
                   ?.content
-                  ?.parts?.[0]
-                  ?.text;
+                  ?.parts;
 
               if (
-                piece
+                Array.isArray(
+                  parts
+                )
               ) {
-                emitted =
-                  true;
+                for (
+                  const part of
+                    parts
+                ) {
+                  const piece =
+                    part?.text;
 
-                fullAssistantText +=
-                  piece;
+                  if (
+                    typeof piece ===
+                      "string" &&
+                    piece
+                  ) {
+                    emitted =
+                      true;
 
-                reply.raw.write(
-                  `data: ${JSON.stringify(
-                    {
-                      piece,
-                    }
-                  )}\n\n`
-                );
+                    fullAssistantText +=
+                      piece;
+
+                    reply.raw.write(
+                      `data: ${JSON.stringify(
+                        {
+                          piece,
+                        }
+                      )}\n\n`
+                    );
+                  }
+                }
               }
-            } catch {}
+            } catch {
+              // تجاهل
+            }
           }
         }
 
-        clearTimeout(
-          timeout
-        );
+        // ===================================================
+        // النهاية
+        // ===================================================
 
         if (
           !emitted
@@ -3372,26 +3770,23 @@ ${internalProfile.weaknesses.join(
 
                 model:
                   chosen.model,
+
+                thinkingLevel,
               }
             )}\n\n`
           );
         }
-      } catch (
-        err: any
-      ) {
-        clearTimeout(
-          timeout
-        );
-
+      } catch (error: any) {
         console.error(
           "AI stream failed:",
-          err?.message ||
-            err
+          error?.message ||
+            error
         );
 
         try {
           if (
-            !reply.raw.headersSent
+            !reply.raw
+              .headersSent
           ) {
             return reply
               .status(500)
@@ -3412,21 +3807,19 @@ ${internalProfile.weaknesses.join(
               }
             )}\n\n`
           );
-        } catch {}
+        } catch {
+          // تجاهل
+        }
       } finally {
-        clearTimeout(
-          timeout
-        );
-
         if (
           !reply.raw.writableEnded
         ) {
           reply.raw.end();
         }
 
-        // ===================================================
+        // =================================================
         // 💾 حفظ المحادثة
-        // ===================================================
+        // =================================================
 
         if (
           outgoingUserText &&
@@ -3458,6 +3851,10 @@ ${internalProfile.weaknesses.join(
                 fullAssistantText,
             },
           ];
+
+          /*
+            الحفظ لا يعطل استجابة الطالب.
+          */
 
           saveConversationTurn(
             app,
