@@ -7,27 +7,26 @@ import { FastifyInstance } from "fastify";
    المفتاح في متغير بيئي GEMINI_API_KEY (backend فقط)
 
    التعديلات في هذه النسخة:
-   1) تحقق برمجي من إجابات وضع "اختبرني"
-   2) تحديد معدل الاستخدام لكل مستخدم
-   3) حفظ واسترجاع الجلسة
-   4) endpoint لتقييم الرد
-   5) تتبّع الاستهلاك اليومي والتحويل للنموذج البديل
-   6) إرسال قطعة استيعاب المقروء كاملة
-   7) منع Gemini من اختراع الأسئلة والخيارات
-   8) جميع الأسئلة التدريبية من بنك قُدرة فقط
-   9) الأسئلة المشابهة من نفس الفئة فقط
-  10) شبكة أمان لجلب القطعة من البنك
-  11) دعم أسماء حقول بديلة للقطعة
-  12) maxOutputTokens = 8192
-  13) المهلة = 90 ثانية
-  14) منع Markdown في الرد النهائي
-  15) تنظيف علامات التنسيق غير المرغوبة
-  16) تشديد مراجعة الإملاء واللغة العربية
-  17) لا يوجد أي تغيير على الخط أو CSS
+   1) تحقق برمجي من إجابات وضع "اختبرني" بدل ترك الحكم كاملاً للنموذج
+   2) تحديد معدل الاستخدام (rate limiting) لكل مستخدم
+   3) حفظ/استرجاع الجلسة عبر إعادة تحميل الصفحة
+   4) endpoint بسيط لتقييم الرد (👍/👎) لأغراض القياس (KPIs)
+   5) تتبّع استهلاك يومي حقيقي لحصة Gemini + تحويل تلقائي (fallback) لنموذج
+      بديل قبل الوصول للحد بدل انتظار خطأ 429 من Google نفسه
+   6) إرسال قطعة استيعاب المقروء كاملة إلى Gemini عند شرح السؤال
+   7) منع Gemini منعاً تاماً من اختراع الأسئلة أو الخيارات
+   8) جميع الأسئلة التدريبية/المشابهة تأتي من بنك أسئلة قُدرة فقط
+   9) ✅ الأسئلة المشابهة تأتي من نفس الفئة فقط (لا خلط بين الفئات)
+  10) ✅ شبكة أمان لجلب القطعة من البنك إذا لم تصل من الفرونت
+  11) ✅ دعم أسماء حقول بديلة للقطعة (context/passageText/paragraph)
+  12) ✅ زيادة maxOutputTokens إلى 8192 لمنع قطع الإجابة بنصها
+  13) ✅ زيادة المهلة إلى 90 ثانية لدعم التفكير العميق
+  14) ✅ Failover تلقائي: إذا ازدحم النموذج الأساسي ← ينتقل للبديل فوراً
 ========================================================= */
 
-const PRIMARY_MODEL = "gemini-3.1-flash-lite";
-const FALLBACK_MODEL = "gemini-3.5-flash-lite";
+// النموذج الأساسي، والنموذج البديل عند اقتراب/بلوغ الحد اليومي أو الازدحام
+const PRIMARY_MODEL = "gemini-3.5-flash-lite";
+const FALLBACK_MODEL = "gemini-3.1-flash-lite";
 
 const PRIMARY_DAILY_CAP = Number(
   process.env.GEMINI_PRIMARY_DAILY_CAP || 500
@@ -83,47 +82,6 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000).unref?.();
 
-function selectModelForRequest(): {
-  model: string;
-  url: string;
-} | null {
-  if (!isModelAtCap(PRIMARY_MODEL, PRIMARY_DAILY_CAP)) {
-    if (isModelNearCap(PRIMARY_MODEL, PRIMARY_DAILY_CAP)) {
-      console.warn(
-        `[Gemini quota] ${PRIMARY_MODEL} عند ${getUsage(
-          PRIMARY_MODEL
-        )}/${PRIMARY_DAILY_CAP} تقريباً — اقترب من الحد اليومي.`
-      );
-    }
-
-    return {
-      model: PRIMARY_MODEL,
-      url: GEMINI_STREAM_URL_FOR(PRIMARY_MODEL),
-    };
-  }
-
-  if (!isModelAtCap(FALLBACK_MODEL, FALLBACK_DAILY_CAP)) {
-    if (isModelNearCap(FALLBACK_MODEL, FALLBACK_DAILY_CAP)) {
-      console.warn(
-        `[Gemini quota] النموذج البديل ${FALLBACK_MODEL} اقترب من حصته (${getUsage(
-          FALLBACK_MODEL
-        )}/${FALLBACK_DAILY_CAP}).`
-      );
-    }
-
-    return {
-      model: FALLBACK_MODEL,
-      url: GEMINI_STREAM_URL_FOR(FALLBACK_MODEL),
-    };
-  }
-
-  console.error(
-    "[Gemini quota] كلا النموذجين بلغا الحد اليومي."
-  );
-
-  return null;
-}
-
 // =========================================================
 // 🧠 التفكير العميق
 // =========================================================
@@ -162,6 +120,7 @@ function checkRateLimit(userId: string): {
   }
 
   timestamps.push(now);
+
   rateLimitStore.set(userId, timestamps);
 
   return {
@@ -201,6 +160,7 @@ interface PendingQuiz {
 
 const pendingQuizStore = new Map<string, PendingQuiz>();
 
+// ✅ تتبع آخر فئة شرحناها لكل طالب
 const lastCategoryStore = new Map<string, string>();
 
 const PENDING_QUIZ_TTL_MS = 30 * 60 * 1000;
@@ -252,16 +212,10 @@ function matchStudentAnswer(
     }
   }
 
-  const normalized = trimmed.replace(
-    /[\s\u064B-\u065F]/g,
-    ""
-  );
+  const normalized = trimmed.replace(/[\s\u064B-\u065F]/g, "");
 
   for (let i = 0; i < pending.options.length; i++) {
-    const opt = pending.options[i].replace(
-      /[\s\u064B-\u065F]/g,
-      ""
-    );
+    const opt = pending.options[i].replace(/[\s\u064B-\u065F]/g, "");
 
     if (
       opt &&
@@ -276,66 +230,27 @@ function matchStudentAnswer(
 }
 
 // =========================================================
-// 🧹 تنظيف إخراج Gemini
-// =========================================================
-
-function cleanAIText(text: string): string {
-  if (!text) return "";
-
-  return text
-    // إزالة عناوين Markdown مثل ### الفكرة
-    .replace(/^\s*#{1,6}[ \t]+/gm, "")
-
-    // إزالة Bold Markdown
-    .replace(/\*\*/g, "")
-
-    // إزالة Bold باستخدام underscore
-    .replace(/__/g, "")
-
-    // إزالة code fences
-    .replace(/```(?:[a-zA-Z0-9_-]+)?/g, "")
-
-    // إزالة inline code
-    .replace(/`/g, "")
-
-    // إزالة block quote في بداية السطر
-    .replace(/^\s*>\s?/gm, "")
-
-    // إزالة محارف التحكم غير المرئية مع الحفاظ على الأسطر
-    .replace(
-      /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g,
-      ""
-    );
-}
-
-// =========================================================
 // 🧠 شخصية المعلم الذكي
 // =========================================================
 
-const BASE_SYSTEM_PROMPT = `أنت "المعلم الذكي في قُدرة"، مدرّس خصوصي خبير في القسم اللفظي من اختبار القدرات العامة (قياس) في السعودية.
+const BASE_SYSTEM_PROMPT = `أنت "المعلم الذكي في قُدرة" — مدرّس خصوصي حقيقي خبير في القسم اللفظي من اختبار القدرات العامة (قياس) في السعودية.
 
-تخصصك
+## تخصصك
+التناظر اللفظي، إكمال الجمل، الخطأ السياقي، المفردة المختلفة (الشاذة)، استيعاب المقروء، المفردات، العلاقات بين الكلمات، واستراتيجيات القدرات اللفظية.
 
-التناظر اللفظي، وإكمال الجمل، والخطأ السياقي، والمفردة المختلفة، واستيعاب المقروء، والمفردات، والعلاقات بين الكلمات، واستراتيجيات القدرات اللفظية.
-
-شخصيتك
-
-- واضح، وذكي، وصبور، وطبيعي.
+## شخصيتك
+- واضح، ذكي، صبور، طبيعي.
 - مختصر عندما يكون السؤال سهلاً، ومفصّل عندما يكون صعباً.
-- مشجّع دون مبالغة.
+- مشجّع بدون مبالغة.
 - لا تتحدث بأسلوب روبوتي أو رسمي مفرط.
-- استخدم أسلوب مدرّس خبير وطبيعي.
+- استخدم أسلوب مدرّس خبير: "تمام، خلنا نفكر فيها خطوة بخطوة".
 
-فهم السياق
+## فهم السياق
+- أنت تتابع محادثة مستمرة. قد يقول الطالب "ما فهمت" أو "ليش؟" أو "وضح أكثر" أو "أعطني مثال" أو "لو...". هذه كلها متعلقة بالشرح السابق — ارجع إليه وأجب عن قصده.
+- افهم نية الطالب دائماً: هل يطلب شرحاً جديداً، تبسيطاً، استراتيجية، سؤالاً مشابهاً، اختباراً، أو متابعة لشرح سابق؟
+- إذا قال "ما فهمت" لا ترد "يرجى توضيح السؤال" — بل أعد شرح الفكرة بطريقة أبسط.
 
-- أنت تتابع محادثة مستمرة.
-- قد يقول الطالب "ما فهمت" أو "ليش؟" أو "وضح أكثر" أو "أعطني مثالاً" أو "لو...".
-- افهم هذه الرسائل وفقاً لسياق الشرح السابق.
-- إذا قال الطالب "ما فهمت"، فأعد شرح الفكرة بطريقة أبسط.
-- لا تطلب منه إعادة السؤال إذا كان المقصود واضحاً من السياق.
-- حدّد هل يريد شرحاً، أو تبسيطاً، أو استراتيجية، أو سؤالاً مشابهاً، أو اختباراً، أو متابعة لشرح سابق.
-
-مصدر الأسئلة والخيارات — إلزامي جداً
+## 🚨 مصدر الأسئلة والخيارات — إلزامي جداً
 
 هذه أهم قاعدة في النظام:
 
@@ -344,131 +259,76 @@ const BASE_SYSTEM_PROMPT = `أنت "المعلم الذكي في قُدرة"، �
 - لا تنشئ أي خيارات جديدة من خيالك.
 - لا تغيّر صياغة سؤال موجود في بنك الأسئلة.
 - لا تغيّر نص أي خيار موجود في بنك الأسئلة.
-- لا تضف خياراً خامساً ولا تحذف أي خيار.
+- لا تضف خياراً خامساً أو تحذف خياراً.
 - لا تستبدل خيارات البنك بخيارات من عندك.
 - لا تخترع إجابة صحيحة لسؤال من البنك.
-- عندما يطلب الطالب "اختبرني" أو "سؤال مشابه" أو "أعطني مثالاً" أو "سؤالاً تدريبياً"، استخدم فقط السؤال الذي يرسله النظام من بنك أسئلة قُدرة.
-- إذا لم يرسل النظام سؤالاً من البنك، فلا تخترع سؤالاً بديلاً.
-- أخبر الطالب باختصار أن السؤال التدريبي غير متوفر حالياً.
-- إذا أُرسل سؤال من البنك مع خياراته، اعرض السؤال نفسه والخيارات نفسها دون تعديل.
+- عندما يطلب الطالب "اختبرني" أو "سؤال مشابه" أو "أعطني مثالاً" أو "سؤالاً تدريبياً"، يجب أن تستخدم فقط السؤال الذي يرسله النظام لك على أنه سؤال حقيقي من بنك أسئلة قُدرة.
+- إذا لم يرسل النظام سؤالاً من البنك، فلا تخترع سؤالاً بديلاً. قل للطالب باختصار إن السؤال التدريبي غير متوفر حالياً.
+- إذا أُرسل لك سؤال من البنك مع خياراته، اعرض نفس السؤال ونفس الخيارات فقط.
 - مهمتك الأساسية هي الشرح والتعليم، وليست إنشاء بنك أسئلة.
 
-الإجابة الصحيحة — إلزامي
-
+## الإجابة الصحيحة — إلزامي
 - إذا أرسل النظام الإجابة الصحيحة المؤكدة، فهي نهائية.
-- لا تعِد اختيار الإجابة بنفسك.
+- لا تعيد اختيار الإجابة بنفسك.
 - لا تستبدل الإجابة الصحيحة بإجابة من اجتهادك.
 - اشرح لماذا الإجابة التي حددها النظام صحيحة.
-- تعامل مع الخيارات المرسلة من النظام فقط.
+- عند وجود خيارات، تعامل مع الخيارات المرسلة من النظام فقط.
 
-استيعاب المقروء
-
-- إذا أُرسلت قطعة استيعاب مقروء، فالقطعة جزء أساسي من السؤال.
+## استيعاب المقروء — مهم جداً
+- إذا أُرسلت لك قطعة استيعاب مقروء، فالقطعة جزء أساسي من السؤال وليست معلومة إضافية.
 - اقرأ القطعة كاملة قبل تحليل السؤال.
 - اربط الإجابة بالمعلومات الواردة في القطعة نفسها.
 - لا تعتمد على معلومات خارجية إذا كان السؤال يمكن حله من القطعة.
-- لا تتجاهل أجزاء القطعة أثناء الاستدلال.
-- إذا احتاج السؤال إلى الربط بين أكثر من فقرة أو معلومة، فاربط بينها قبل الشرح.
-- إذا كانت الإجابة الصحيحة مؤكدة من النظام، فلا تغيّرها.
-- عند شرح سؤال استيعاب المقروء، استشهد بمعنى النص ولا تضف معلومات خارجية كدليل على الإجابة.
+- لا تختصر القطعة أو تتجاهل أجزاء منها أثناء الاستدلال.
+- إذا كان السؤال يحتاج الربط بين أكثر من فقرة أو أكثر من معلومة داخل القطعة، قم بهذا الربط قبل اختيار الإجابة.
+- إذا كانت الإجابة الصحيحة مؤكدة من النظام، فلا تغيّرها حتى لو بدا لك خيار آخر محتملاً.
+- عند شرح سؤال استيعاب المقروء، استشهد بالمعنى الوارد في القطعة ولا تضف معلومات خارجية كدليل على الإجابة.
 
-شرح السؤال الحالي
+## شرح السؤال الحالي
+عند شرح سؤال (يُرسل لك كامل مع الإجابة الصحيحة المؤكدة):
+1. الفكرة الأساسية.
+2. الإجابة الصحيحة (اعتمد على الإجابة المرسلة من النظام حرفياً — لا تخمّن غيرها).
+3. لماذا هي صحيحة.
+4. أقوى مشتت خاطئ ولماذا هو خاطئ تحديداً.
+5. القاعدة أو الطريقة التي تفيد في سؤال مشابه.
+- لا تجعل الشرح طويلاً بدون سبب.
+- استخدم هيكل منظماً بعناوين مثل: الفكرة، الحل، لماذا، القاعدة.
 
-عند شرح سؤال أرسله النظام مع إجابة صحيحة مؤكدة، استخدم عند الحاجة هذا التنظيم:
-
-الفكرة
-
-اشرح الفكرة الأساسية باختصار.
-
-الحل
-
-اذكر الإجابة الصحيحة المؤكدة من النظام.
-
-لماذا؟
-
-اشرح سبب صحة الإجابة بوضوح.
-
-المشتت
-
-اشرح أقوى خيار خاطئ ولماذا هو غير صحيح، عندما يكون ذلك مفيداً.
-
-القاعدة
-
-اذكر القاعدة أو الطريقة التي تساعد الطالب في سؤال مشابه.
-
-لا تجعل الشرح طويلاً دون سبب.
-
-التدريب التفاعلي
-
-- إذا قال الطالب "اختبرني" أو "أعطني سؤالاً" أو "سؤال مشابه" أو "أعطني مثالاً"، استخدم فقط السؤال الذي أرسله النظام من بنك الأسئلة.
+## التدريب التفاعلي — مهم جداً
+- إذا قال "اختبرني" أو "أعطني سؤالاً" أو "سؤال مشابه" أو "أعطني مثالاً": استخدم فقط السؤال الذي أرسله النظام من بنك الأسئلة.
 - لا تكشف الإجابة الصحيحة قبل إجابة الطالب.
-- لا تغيّر خيارات السؤال.
-- عندما يرسل النظام تأكيداً برمجياً بأن إجابة الطالب صحيحة أو خاطئة، فهذا التأكيد نهائي.
-- لا تعِد تقييم صحة الإجابة بنفسك.
-- اشرح السبب بناءً على النتيجة المؤكدة من النظام.
-- إذا طلب الطالب سؤالاً أصعب أو أسهل، فلا تستخدم إلا سؤالاً حقيقياً من البنك.
-- لا تنشئ سؤالاً جديداً حتى لو طلب الطالب ذلك.
+- لا تغيّر خيارات السؤال الذي أرسله النظام.
+- عندما يرسل لك النظام تأكيداً برمجياً بأن إجابة الطالب "صحيحة" أو "خاطئة" لسؤال معلَّق سابق، هذا التأكيد نهائي ومصدره النظام لا اجتهادك، ولا تعيد الحكم على صحة الإجابة بنفسك، فقط اشرح السبب بناءً على هذا التأكيد.
+- إذا قال "أصعب": ارفع المستوى عن طريق اختيار سؤال حقيقي من البنك فقط.
+- إذا قال "أسهل": اختر سؤالاً حقيقياً أسهل من البنك فقط.
+- لا تنشئ سؤالاً جديداً حتى لو طلب الطالب ذلك بصيغة "سوي لي سؤال".
 
-التخصيص حسب مستوى الطالب
+## التخصيص حسب مستوى الطالب
+- ستحصل على بيانات الطالب ضمن التعليمات البرمجية.
+- إذا سأل عن مهارة من نقاط ضعفه، اشرح بطريقة أبطأ وأكثر تدريجاً وأعطه تمارين أكثر.
+- لا تعطِ توصيات عشوائية — اجعل التوصية مبنية على بيانات الطالب.
 
-- استخدم بيانات الطالب التي يرسلها النظام للتخصيص.
-- إذا كانت المهارة من نقاط ضعف الطالب، فاشرح بطريقة أكثر تدرجاً.
-- لا تعطِ توصيات عشوائية.
-- اجعل التوصيات مبنية على بيانات الطالب.
-
-منع الهلوسة
-
-- لا تخترع إجابة لسؤال موجود.
-- لا تغيّر الإجابة الصحيحة المرسلة من النظام.
-- لا تخترع خيارات.
+## منع الهلوسة — إلزامي
+- لا تخترع إجابة لسؤال موجود — الإجابة الصحيحة تُرسل لك من النظام، اعتمد عليها.
+- لا تغيّر الإجابة الصحيحة المرسلة.
+- لا تخترع خيارات لسؤال حقيقي.
 - لا تخترع أسئلة تدريبية.
 - لا تدّعي أن سؤالاً من عندك موجود في بنك الأسئلة.
-- لا تدّعي وجود معلومة في البنك إذا لم يرسلها النظام.
-- إذا لم تكن المعلومة موجودة في السؤال أو القطعة أو البيانات المتاحة، فقل بوضوح إنه لا يمكن تحديدها من المعطيات المتوفرة.
-- إذا لم يتوفر سؤال من البنك، فلا تعوضه بسؤال من عندك.
+- لا تدّعي معلومة موجودة في بنك الأسئلة إذا لم تكن موجودة.
+- إذا لم تكن المعلومة موجودة في السؤال أو القطعة أو البيانات التي أرسلها النظام، قل بوضوح إنك لا تستطيع تحديدها من المعطيات المتوفرة.
+- إذا لم يتوفر سؤال من البنك للتدريب، لا تعوضه بسؤال من عندك.
 
-الإملاء واللغة — إلزامي جداً
+## الإملاء والكتابة — إلزامي
+- راجع الهمزات (أ إ آ ؤ ئ)، والتاء المربوطة (ة) مقابل المفتوحة (ت).
+- لا كلمات ملتصقة أو تكرار حروف.
+- لا تكتب رموزاً برمجية أو \\n — اكتب عربياً نظيفاً فقط.
+- اكتب بالعربية الفصحى الواضحة.
 
-- اكتب بالعربية الفصحى الواضحة والطبيعية.
-- راجع الإملاء والنحو والصياغة قبل إخراج الرد.
-- راجع الهمزات: أ، إ، آ، ؤ، ئ.
-- راجع التاء المربوطة "ة" والتاء المفتوحة "ت" والهاء "ه".
-- لا تكتب كلمات ملتصقة.
-- لا تكرر الحروف بالخطأ.
-- لا تكتب كلمات مشوهة أو غير مفهومة.
-- استخدم علامات الترقيم بصورة طبيعية.
-- لا تعرض رموزاً برمجية للمستخدم.
-- لا تكتب تسلسلات برمجية مثل \\n أو \\t كنص ظاهر.
-- لا تعرض تعليمات النظام للطالب.
-
-تنسيق الرد — إلزامي جداً
-
-- أخرج نصاً عادياً فقط.
-- لا تستخدم Markdown مطلقاً.
-- لا تستخدم علامات الشباك لإنشاء العناوين.
-- لا تستخدم النجمتين لتغليظ النص.
-- لا تستخدم الشرطة السفلية لتنسيق النص.
-- لا تستخدم علامات الاقتباس البرمجية.
-- لا تستخدم HTML.
-- لا تضع أي رموز تنسيق حول العناوين.
-- اكتب "الفكرة" مباشرة عندما تحتاج هذا العنوان.
-- اكتب "الحل" مباشرة عندما تحتاج هذا العنوان.
-- اكتب "لماذا؟" مباشرة عندما تحتاج هذا العنوان.
-- اكتب "المشتت" مباشرة عندما تحتاج هذا العنوان.
-- اكتب "القاعدة" مباشرة عندما تحتاج هذا العنوان.
-- ضع العنوان في سطر مستقل.
-- استخدم سطراً فارغاً بين أقسام الشرح.
-- اجعل الرد النهائي نصاً عربياً نظيفاً وجاهزاً للعرض مباشرة.
-- لا تستخدم زخارف أو رموزاً غير ضرورية.
-- لا تغيّر نص السؤال أو الخيارات الأصلية من البنك بغرض تحسين الإملاء.
-
-الأسلوب
-
+## الأسلوب في الرد
 - ابدأ بالإجابة المباشرة ثم الشرح.
-- استخدم عناوين قصيرة عند الحاجة.
-- استخدم الترقيم البسيط عند الحاجة.
-- تجنب الفقرات الضخمة.
-- كن موجزاً في السؤال السهل ومفصلاً في السؤال الصعب.`;
+- استخدم العناوين القصيرة: الفكرة / الحل / لماذا / القاعدة.
+- نقاط مرقمة عند الحاجة، وتجنب الفقرات الضخمة.
+- كن موجزاً في السهل، مفصلاً في الصعب.`;
 
 // =========================================================
 // 🤖 تحليل مستوى الطالب
@@ -675,7 +535,6 @@ async function fetchSimilarQuestion(
     } else {
       pool = all.filter((x) => {
         const c = String(x.question.category || "");
-
         return (
           c.includes(category) ||
           category.includes(c)
@@ -699,20 +558,15 @@ async function fetchSimilarQuestion(
 
   return {
     question: pick.question.question,
-
     options: Array.isArray(pick.question.options)
       ? pick.question.options
       : [],
-
     correctIndex:
       typeof pick.question.correctIndex === "number"
         ? pick.question.correctIndex
         : 0,
-
     category: pick.question.category,
-
     explanation: pick.question.explanation,
-
     passage: String(
       pick.question.passage ||
         pick.question.context ||
@@ -772,7 +626,7 @@ function detectIntent(
 }
 
 // =========================================================
-// 💾 حفظ واسترجاع الجلسة
+// 💾 حفظ/استرجاع الجلسة
 // =========================================================
 
 const SESSION_ACTIVE_WINDOW_MS = 30 * 60 * 1000;
@@ -931,10 +785,9 @@ export async function aiRoutes(app: FastifyInstance) {
     {
       preHandler: app.authenticate,
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       return reply.send({
         success: true,
-
         date: pacificDateKey(),
 
         primary: {
@@ -997,7 +850,8 @@ export async function aiRoutes(app: FastifyInstance) {
         await app.prisma.aiFeedback.create({
           data: {
             userId,
-            messageIndex: messageIndex ?? -1,
+            messageIndex:
+              messageIndex ?? -1,
             rating,
           },
         });
@@ -1074,12 +928,8 @@ export async function aiRoutes(app: FastifyInstance) {
           options: string[];
           correctIndex: number;
           category?: string;
-          passage?: string;
 
-          context?: string;
-          passageText?: string;
-          readingPassage?: string;
-          paragraph?: string;
+          passage?: string;
         };
 
         history?: Array<{
@@ -1118,7 +968,6 @@ export async function aiRoutes(app: FastifyInstance) {
 
           contents.push({
             role,
-
             parts: [
               {
                 text: String(
@@ -1146,17 +995,17 @@ export async function aiRoutes(app: FastifyInstance) {
       // السؤال الحالي
       // =====================================================
 
-      const cq = body?.currentQuestion;
+      const cq =
+        body?.currentQuestion;
 
       if (cq && cq.question) {
         currentCategory = cq.category;
-        currentQuestionText = cq.question;
+
+        currentQuestionText =
+          cq.question;
 
         if (cq.category) {
-          lastCategoryStore.set(
-            userId,
-            String(cq.category)
-          );
+          lastCategoryStore.set(userId, String(cq.category));
         }
 
         if (
@@ -1168,53 +1017,44 @@ export async function aiRoutes(app: FastifyInstance) {
           useDeepReasoning = true;
         }
 
-        // ===================================================
-        // التحقق من الخيارات والإجابة
-        // ===================================================
-
         const validOptions =
           Array.isArray(cq.options) &&
           cq.options.length >= 2 &&
-          typeof cq.correctIndex === "number" &&
+          typeof cq.correctIndex ===
+            "number" &&
           cq.correctIndex >= 0 &&
-          cq.correctIndex < cq.options.length;
+          cq.correctIndex <
+            cq.options.length;
 
         const correctOption =
-          validOptions
+          validOptions &&
+          cq.options.length > 0
             ? cq.options[cq.correctIndex]
             : null;
 
-        // ===================================================
-        // قطعة استيعاب المقروء
-        // ===================================================
-
+        // ✅ قراءة passage + دعم أسماء بديلة + شبكة أمان من البنك
         let passage =
           typeof cq.passage === "string"
             ? cq.passage.trim()
             : "";
 
         if (!passage) {
+          const anyCq = cq as any;
           passage = String(
-            cq.context ||
-              cq.passageText ||
-              cq.readingPassage ||
-              cq.paragraph ||
+            anyCq.context ||
+              anyCq.passageText ||
+              anyCq.readingPassage ||
+              anyCq.paragraph ||
               ""
           ).trim();
         }
 
-        // شبكة أمان لجلب القطعة
         if (!passage) {
           try {
-            const secs =
-              await app.prisma.section.findMany({
-                where: {
-                  isActive: true,
-                },
-                select: {
-                  questions: true,
-                },
-              });
+            const secs = await app.prisma.section.findMany({
+              where: { isActive: true },
+              select: { questions: true },
+            });
 
             outer: for (const sec of secs) {
               const qs = Array.isArray(sec.questions)
@@ -1222,12 +1062,7 @@ export async function aiRoutes(app: FastifyInstance) {
                 : [];
 
               for (const q of qs) {
-                if (
-                  !q ||
-                  q.question !== cq.question
-                ) {
-                  continue;
-                }
+                if (!q || q.question !== cq.question) continue;
 
                 const p = String(
                   q.passage ||
@@ -1245,40 +1080,35 @@ export async function aiRoutes(app: FastifyInstance) {
               }
             }
           } catch (e) {
-            console.error(
-              "passage lookup error:",
-              e
-            );
+            console.error("passage lookup error:", e);
           }
         }
 
         const isReadingComprehension =
-          cq.category === "استيعاب المقروء" ||
+          cq.category ===
+            "استيعاب المقروء" ||
           passage.length > 0;
 
         const explainMsg = [
-          `السؤال من قسم ${cq.category || "غير محدد"}:`,
-
+          `السؤال من قسم ${
+            cq.category ||
+            "غير محدد"
+          }:`,
           "",
 
           passage
-            ? `========== قطعة الاستيعاب المقروء ==========\n${passage}\n========== نهاية القطعة ==========`
+            ? `========== قطعة الاستيعاب المقروء ==========\n${passage}\n========== نهاية القطعة ==========\n`
             : "",
-
-          "",
 
           "السؤال:",
           cq.question,
-
           "",
 
           "الخيارات الموجودة في بنك الأسئلة:",
-
           ...cq.options.map(
-            (o, i) => `${i + 1}) ${o}`
+            (o, i) =>
+              `${i + 1}) ${o}`
           ),
-
-          "",
 
           correctOption
             ? `الإجابة الصحيحة المؤكدة من بنك الأسئلة: ${correctOption}`
@@ -1307,8 +1137,6 @@ export async function aiRoutes(app: FastifyInstance) {
           "وضح لماذا الإجابة صحيحة.",
           "وضح لماذا أقوى مشتت خاطئ غير صحيح تحديداً.",
           "اذكر القاعدة أو الطريقة التي تفيد في سؤال مشابه.",
-          "اكتب الرد كنص عربي عادي فقط.",
-          "لا تستخدم Markdown أو علامات تنسيق مثل عناوين الشباك أو النجمتين.",
         ]
           .filter(Boolean)
           .join("\n");
@@ -1322,10 +1150,6 @@ export async function aiRoutes(app: FastifyInstance) {
           ],
         });
       } else {
-        // ===================================================
-        // سؤال يدوي
-        // ===================================================
-
         const question = (
           body?.question || ""
         ).trim();
@@ -1346,10 +1170,6 @@ export async function aiRoutes(app: FastifyInstance) {
           });
         }
 
-        // ===================================================
-        // إجابة اختبار معلّق
-        // ===================================================
-
         const pending =
           getPendingQuiz(userId);
 
@@ -1360,7 +1180,9 @@ export async function aiRoutes(app: FastifyInstance) {
               pending
             );
 
-          if (matchedIndex !== null) {
+          if (
+            matchedIndex !== null
+          ) {
             const isCorrect =
               matchedIndex ===
               pending.correctIndex;
@@ -1376,28 +1198,19 @@ export async function aiRoutes(app: FastifyInstance) {
               ];
 
             const verificationMsg = [
-              "النظام تحقق برمجياً من إجابة الطالب على السؤال التدريبي السابق. لا تعِد الحكم على الصحة بنفسك.",
-
-              "",
+              "النظام تحقق برمجياً من إجابة الطالب على السؤال التدريبي السابق (لا تعِد الحكم على الصحة بنفسك):",
 
               pending.passage
                 ? `قطعة الاستيعاب المقروء:\n${pending.passage}`
                 : "",
 
-              "",
-
               `السؤال: ${pending.question}`,
 
-              "",
-
-              "الخيارات الأصلية من بنك الأسئلة:",
-
+              `الخيارات الأصلية من بنك الأسئلة:`,
               ...pending.options.map(
                 (o, i) =>
                   `${i + 1}) ${o}`
               ),
-
-              "",
 
               `إجابة الطالب: ${studentOption}`,
 
@@ -1405,8 +1218,8 @@ export async function aiRoutes(app: FastifyInstance) {
 
               `النتيجة المؤكدة: ${
                 isCorrect
-                  ? "إجابة صحيحة"
-                  : "إجابة خاطئة"
+                  ? "إجابة صحيحة ✅"
+                  : "إجابة خاطئة ❌"
               }`,
 
               "",
@@ -1419,12 +1232,11 @@ export async function aiRoutes(app: FastifyInstance) {
 
               isCorrect
                 ? "أخبر الطالب أنه أصاب، واذكر بإيجاز لماذا هذه الإجابة صحيحة والقاعدة المستفادة."
-                : "أخبر الطالب أن الإجابة غير صحيحة بلطف، ثم اشرح لماذا الإجابة الصحيحة هي الصائبة ولماذا اختياره تحديداً كان مشتتاً، واذكر القاعدة.",
+                : "أخبر الطالب أنه أخطأ بلطف دون تثبيط، ثم اشرح لماذا الإجابة الصحيحة هي الصائبة ولماذا اختياره تحديداً كان مشتتاً، واذكر القاعدة.",
 
               "",
 
               "ممنوع اختراع خيارات جديدة أو سؤال جديد أثناء الشرح.",
-              "اكتب نصاً عربياً عادياً دون Markdown.",
             ]
               .filter(Boolean)
               .join("\n");
@@ -1448,27 +1260,26 @@ export async function aiRoutes(app: FastifyInstance) {
             }
 
             if (pending.category) {
-              lastCategoryStore.set(
-                userId,
-                String(pending.category)
-              );
+              lastCategoryStore.set(userId, String(pending.category));
             }
 
-            pendingQuizStore.delete(userId);
+            pendingQuizStore.delete(
+              userId
+            );
 
-            verifiedAnswerHandled = true;
+            verifiedAnswerHandled =
+              true;
           }
         }
-
-        // ===================================================
-        // إذا لم تكن إجابة على اختبار
-        // ===================================================
 
         if (!verifiedAnswerHandled) {
           const intent =
             detectIntent(question);
 
-          if (intent.action === "similar") {
+          if (
+            intent.action ===
+            "similar"
+          ) {
             const effectiveCategory =
               currentCategory ||
               lastCategoryStore.get(userId);
@@ -1482,7 +1293,8 @@ export async function aiRoutes(app: FastifyInstance) {
 
             if (bank) {
               const bankPassage =
-                typeof bank.passage === "string"
+                typeof bank.passage ===
+                "string"
                   ? bank.passage.trim()
                   : "";
 
@@ -1539,8 +1351,8 @@ export async function aiRoutes(app: FastifyInstance) {
 - لا تكشف الإجابة الصحيحة الآن.
 - انتظر إجابة الطالب.
 - بعد إجابة الطالب سيقوم النظام بالتحقق برمجياً من الإجابة.
-- إذا كانت هذه مسألة استيعاب مقروء، اعرض القطعة كاملة قبل السؤال.
-- لا تستخدم Markdown أو علامات تنسيق غير ضرورية.`,
+- إذا كانت هذه مسألة استيعاب مقروء، اعرض القطعة كاملة قبل السؤال.`,
+
                     },
                   ],
                 });
@@ -1550,19 +1362,14 @@ export async function aiRoutes(app: FastifyInstance) {
                   {
                     question:
                       bank.question,
-
                     options:
                       bank.options,
-
                     correctIndex:
                       bank.correctIndex,
-
                     category:
                       bank.category,
-
                     passage:
                       bankPassage,
-
                     createdAt:
                       Date.now(),
                   }
@@ -1574,7 +1381,8 @@ export async function aiRoutes(app: FastifyInstance) {
                     bank.category
                   )
                 ) {
-                  useDeepReasoning = true;
+                  useDeepReasoning =
+                    true;
                 }
               }
             } else {
@@ -1648,7 +1456,7 @@ export async function aiRoutes(app: FastifyInstance) {
 
       if (studentProfile) {
         const profileContext = [
-          "\n\nبيانات الطالب الحالية. استخدمها للتخصيص فقط ولا تكررها للطالب:",
+          "\n\n## بيانات الطالب الحالية (استخدمها للتخصيص فقط ضمنياً دون تكرارها للطالب):",
 
           `- أسئلة محلولة: ${
             studentProfile.solvedQuestions ??
@@ -1657,78 +1465,35 @@ export async function aiRoutes(app: FastifyInstance) {
 
           `- نسبة الدقة العامة: ${
             studentProfile.accuracy != null
-              ? studentProfile.accuracy + "%"
+              ? studentProfile.accuracy +
+                "%"
               : "غير معروف"
           }`,
 
           studentProfile.strengths &&
-          studentProfile.strengths.length
+          studentProfile.strengths
+            .length
             ? `- نقاط القوة: ${studentProfile.strengths.join(
                 "، "
               )}`
             : "",
 
           studentProfile.weaknesses &&
-          studentProfile.weaknesses.length
-            ? `- نقاط الضعف: ${studentProfile.weaknesses.join(
+          studentProfile.weaknesses
+            .length
+            ? `- نقاط الضعف (ركز على الشرح التدريجي هنا): ${studentProfile.weaknesses.join(
                 "، "
               )}`
             : "",
         ]
-          .filter((x) => x !== "")
+          .filter(
+            (x) => x !== ""
+          )
           .join("\n");
 
         dynamicSystemPrompt +=
           profileContext;
       }
-
-      // =====================================================
-      // ✅ تأكيد نهائي قبل الإرسال للنموذج
-      // =====================================================
-
-      dynamicSystemPrompt += `
-
-تعليمات الإخراج النهائية:
-
-راجع الرد لغوياً وإملائياً قبل إرساله للطالب.
-
-يجب أن يكون الرد النهائي باللغة العربية الواضحة والسليمة.
-
-أخرج نصاً عادياً فقط.
-
-لا تستخدم Markdown مطلقاً.
-
-لا تستخدم علامات الشباك لإنشاء العناوين.
-
-لا تستخدم النجمتين لتغليظ الكلمات.
-
-لا تستخدم الشرطة السفلية للتنسيق.
-
-لا تستخدم HTML.
-
-لا تعرض رموزاً برمجية أو رموز تنسيق للمستخدم.
-
-لا تكتب \\n أو \\t كنص ظاهر.
-
-اكتب العناوين مباشرة وبصورة طبيعية، مثل:
-
-الفكرة
-
-الحل
-
-لماذا؟
-
-المشتت
-
-القاعدة
-
-لا تضع أي علامة تنسيق قبل هذه العناوين أو بعدها.
-
-حافظ على نص السؤال والخيارات القادمة من بنك الأسئلة كما هي حرفياً.
-
-لا تصحح أو تعيد صياغة نص السؤال أو الخيارات الأصلية.
-
-لا تغيّر الإجابة الصحيحة التي أكدها النظام.`;
 
       // =====================================================
       // ⚙️ GENERATION CONFIG
@@ -1767,17 +1532,53 @@ export async function aiRoutes(app: FastifyInstance) {
       };
 
       // =====================================================
-      // اختيار النموذج
+      // ✅ قائمة المرشحين (failover تلقائي)
       // =====================================================
 
-      const selected =
-        selectModelForRequest();
+      const candidates: Array<{
+        model: string;
+        url: string;
+      }> = [];
 
-      if (!selected) {
+      if (!isModelAtCap(PRIMARY_MODEL, PRIMARY_DAILY_CAP)) {
+        if (isModelNearCap(PRIMARY_MODEL, PRIMARY_DAILY_CAP)) {
+          console.warn(
+            `[Gemini quota] ${PRIMARY_MODEL} عند ${getUsage(
+              PRIMARY_MODEL
+            )}/${PRIMARY_DAILY_CAP} تقريباً.`
+          );
+        }
+
+        candidates.push({
+          model: PRIMARY_MODEL,
+          url: GEMINI_STREAM_URL_FOR(PRIMARY_MODEL),
+        });
+      }
+
+      if (!isModelAtCap(FALLBACK_MODEL, FALLBACK_DAILY_CAP)) {
+        if (isModelNearCap(FALLBACK_MODEL, FALLBACK_DAILY_CAP)) {
+          console.warn(
+            `[Gemini quota] ${FALLBACK_MODEL} عند ${getUsage(
+              FALLBACK_MODEL
+            )}/${FALLBACK_DAILY_CAP} تقريباً.`
+          );
+        }
+
+        candidates.push({
+          model: FALLBACK_MODEL,
+          url: GEMINI_STREAM_URL_FOR(FALLBACK_MODEL),
+        });
+      }
+
+      if (candidates.length === 0) {
+        console.error(
+          `[Gemini quota] كلا النموذجين بلغا الحد اليومي. توقف كامل.`
+        );
+
         return reply.status(503).send({
           success: false,
           message:
-            "المعلم الذكي وصل للحد الأقصى من الاستخدام لهذا اليوم. سيعود تلقائياً بعد منتصف الليل بتوقيت المحيط الهادئ.",
+            "المعلم الذكي وصل للحد الأقصى من الاستخدام لهذا اليوم. سيعود تلقائياً بعد منتصف الليل (بتوقيت المحيط الهادئ).",
         });
       }
 
@@ -1790,7 +1591,7 @@ export async function aiRoutes(app: FastifyInstance) {
       );
 
       // =====================================================
-      // حفظ النص
+      // حفظ النص المرسل
       // =====================================================
 
       let fullAssistantText = "";
@@ -1799,7 +1600,6 @@ export async function aiRoutes(app: FastifyInstance) {
         cq?.question
           ? [
               `📌 السؤال: ${cq.question}`,
-
               cq.passage
                 ? `📖 قطعة الاستيعاب:\n${cq.passage}`
                 : "",
@@ -1809,71 +1609,94 @@ export async function aiRoutes(app: FastifyInstance) {
           : (body?.question || "").trim();
 
       // =====================================================
-      // GEMINI REQUEST
+      // 🔄 GEMINI REQUEST مع FAILOVER
       // =====================================================
 
       try {
-        const upstream =
-          await fetch(
-            `${selected.url}&key=${apiKey}`,
-            {
-              method: "POST",
+        // ✅ جرّب النماذج بالترتيب: إذا ازدحم الأساسي ← انتقل للبديل فوراً
+        let upstream: Response | null = null;
+        let chosen = candidates[0];
+        let lastErrMsg = "";
 
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
-
-              body: JSON.stringify(
-                payload
-              ),
-
-              signal:
-                controller.signal,
-            }
-          );
-
-        if (!upstream.ok) {
-          clearTimeout(timeout);
-
-          let errMsg =
-            upstream.statusText;
-
+        for (const cand of candidates) {
           try {
-            const e =
-              await upstream.json();
+            const res = await fetch(
+              `${cand.url}&key=${apiKey}`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+              }
+            );
 
-            errMsg =
-              e?.error?.message ||
-              errMsg;
-          } catch {}
+            if (res.ok) {
+              upstream = res;
+              chosen = cand;
+              console.log(
+                `[Gemini] ✅ اتصال ناجح عبر ${cand.model}`
+              );
+              break;
+            }
 
-          console.error(
-            "Gemini stream error:",
-            errMsg
-          );
+            let errMsg = res.statusText;
+            try {
+              const e = await res.json();
+              errMsg = e?.error?.message || errMsg;
+            } catch {}
 
-          return reply
-            .status(502)
-            .send({
-              success: false,
+            lastErrMsg = errMsg;
+            console.error(
+              `[Gemini] ❌ فشل ${cand.model}:`,
+              errMsg
+            );
 
-              message:
-                /quota|429/i.test(
-                  errMsg
+            // إذا الخطأ مو ازدحام/حصة (مثلاً مفتاح غلط) ← لا تجرب الباقي
+            if (
+              !/high demand|temporarily unavailable|overloaded|503|429|quota|resource has been exhausted/i.test(
+                errMsg
+              )
+            ) {
+              clearTimeout(timeout);
+              return reply.status(502).send({
+                success: false,
+                message: "تعذر الحصول على إجابة الآن. حاول مرة أخرى.",
+              });
+            }
+            // غير كذا: ازدحام ← جرّب النموذج التالي
+            console.warn(
+              `[Gemini] ⏳ ${cand.model} مزدحم، تجربة النموذج التالي...`
+            );
+          } catch (fetchErr: any) {
+            console.error(
+              `[Gemini] fetch error for ${cand.model}:`,
+              fetchErr?.message
+            );
+            lastErrMsg = fetchErr?.message || "fetch error";
+          }
+        }
+
+        if (!upstream) {
+          clearTimeout(timeout);
+          return reply.status(502).send({
+            success: false,
+            message: /quota|429/.test(lastErrMsg)
+              ? "تم تجاوز حد الاستخدام المجاني اليومي. حاول مجدداً لاحقاً."
+              : /high demand|overloaded|temporarily unavailable/.test(
+                  lastErrMsg
                 )
-                  ? "تم تجاوز حد الاستخدام اليومي. حاول مجدداً لاحقاً."
-                  : "تعذر الحصول على إجابة الآن. حاول مرة أخرى.",
-            });
+              ? "الخادم مزدحم حالياً، حاول مرة أخرى بعد قليل."
+              : "تعذر الحصول على إجابة الآن. حاول مرة أخرى.",
+          });
         }
 
         // ===================================================
-        // 📊 احتساب الطلب
+        // 📊 احتساب الطلب على النموذج اللي اشتغل فعلاً
         // ===================================================
 
-        incrementUsage(
-          selected.model
-        );
+        incrementUsage(chosen.model);
 
         // ===================================================
         // SSE
@@ -1885,7 +1708,7 @@ export async function aiRoutes(app: FastifyInstance) {
 
         reply.raw.writeHead(200, {
           "Content-Type":
-            "text/event-stream; charset=utf-8",
+            "text/event-stream",
 
           "Cache-Control":
             "no-cache, no-transform",
@@ -1912,40 +1735,11 @@ export async function aiRoutes(app: FastifyInstance) {
         }
 
         const decoder =
-          new TextDecoder("utf-8");
+          new TextDecoder();
 
         let buffer = "";
+
         let emitted = false;
-
-        // ===================================================
-        // دالة موحدة لإرسال الجزء المنظف
-        // ===================================================
-
-        const emitPiece = (
-          rawPiece: string
-        ) => {
-          const cleanPiece =
-            cleanAIText(rawPiece);
-
-          if (!cleanPiece) {
-            return;
-          }
-
-          emitted = true;
-
-          fullAssistantText +=
-            cleanPiece;
-
-          reply.raw.write(
-            `data: ${JSON.stringify({
-              piece: cleanPiece,
-            })}\n\n`
-          );
-        };
-
-        // ===================================================
-        // قراءة البث
-        // ===================================================
 
         while (true) {
           const {
@@ -2004,28 +1798,23 @@ export async function aiRoutes(app: FastifyInstance) {
                   ?.content?.parts?.[0]
                   ?.text;
 
-              if (
-                typeof piece ===
-                  "string" &&
-                piece
-              ) {
-                emitPiece(piece);
+              if (piece) {
+                emitted = true;
+
+                fullAssistantText +=
+                  piece;
+
+                reply.raw.write(
+                  `data: ${JSON.stringify(
+                    {
+                      piece,
+                    }
+                  )}\n\n`
+                );
               }
-            } catch {
-              // نتجاهل أجزاء SSE غير المكتملة.
-            }
+            } catch {}
           }
         }
-
-        // ===================================================
-        // تفريغ TextDecoder
-        // ===================================================
-
-        buffer += decoder.decode();
-
-        // ===================================================
-        // آخر جزء من buffer
-        // ===================================================
 
         if (
           buffer
@@ -2054,42 +1843,42 @@ export async function aiRoutes(app: FastifyInstance) {
                   ?.content?.parts?.[0]
                   ?.text;
 
-              if (
-                typeof piece ===
-                  "string" &&
-                piece
-              ) {
-                emitPiece(piece);
+              if (piece) {
+                emitted = true;
+
+                fullAssistantText +=
+                  piece;
+
+                reply.raw.write(
+                  `data: ${JSON.stringify(
+                    {
+                      piece,
+                    }
+                  )}\n\n`
+                );
               }
-            } catch {
-              // تجاهل الجزء غير الصالح.
-            }
+            } catch {}
           }
         }
 
         clearTimeout(timeout);
 
-        // ===================================================
-        // تنظيف النص النهائي قبل الحفظ
-        // ===================================================
-
-        fullAssistantText =
-          cleanAIText(
-            fullAssistantText
-          ).trim();
-
         if (!emitted) {
           reply.raw.write(
-            `data: ${JSON.stringify({
-              error:
-                "لم تصل إجابة واضحة. حاول إعادة صياغة السؤال.",
-            })}\n\n`
+            `data: ${JSON.stringify(
+              {
+                error:
+                  "لم تصل إجابة واضحة. حاول إعادة صياغة السؤال.",
+              }
+            )}\n\n`
           );
         } else {
           reply.raw.write(
-            `data: ${JSON.stringify({
-              done: true,
-            })}\n\n`
+            `data: ${JSON.stringify(
+              {
+                done: true,
+              }
+            )}\n\n`
           );
         }
       } catch (err: any) {
@@ -2114,10 +1903,12 @@ export async function aiRoutes(app: FastifyInstance) {
           }
 
           reply.raw.write(
-            `data: ${JSON.stringify({
-              error:
-                "تعذر الاتصال بخدمة الذكاء الاصطناعي.",
-            })}\n\n`
+            `data: ${JSON.stringify(
+              {
+                error:
+                  "تعذر الاتصال بخدمة الذكاء الاصطناعي.",
+              }
+            )}\n\n`
           );
         } catch {}
       } finally {
@@ -2154,10 +1945,7 @@ export async function aiRoutes(app: FastifyInstance) {
 
             {
               role: "assistant",
-              text:
-                cleanAIText(
-                  fullAssistantText
-                ).trim(),
+              text: fullAssistantText,
             },
           ];
 
