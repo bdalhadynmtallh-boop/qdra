@@ -3149,37 +3149,33 @@ ${internalProfile.weaknesses.join(
       // لا temperature.
       // =====================================================
 
-      const thinkingLevel =
-        getThinkingLevel(
-          useDeepReasoning
-        );
+const thinkingLevel =
+  getThinkingLevel(
+    useDeepReasoning
+  );
 
-      const generationConfig = {
-        maxOutputTokens:
-          teaching.depth ===
-          "foundation"
-            ? 1800
-            : 1600,
+const generationConfig = {
+  maxOutputTokens: 8192,
 
-        thinkingConfig: {
-          thinkingLevel,
-        },
-      };
+  thinkingConfig: {
+    thinkingLevel,
+  },
+};
 
-      const payload = {
-        contents,
+const payload = {
+  contents,
 
-        systemInstruction: {
-          parts: [
-            {
-              text:
-                dynamicSystemPrompt,
-            },
-          ],
-        },
+  systemInstruction: {
+    parts: [
+      {
+        text:
+          dynamicSystemPrompt,
+      },
+    ],
+  },
 
-        generationConfig,
-      };
+  generationConfig,
+};
 
       // =====================================================
       // 🤖 النماذج المتاحة
