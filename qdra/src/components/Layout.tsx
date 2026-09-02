@@ -25,6 +25,7 @@ import { useTheme } from "../context/ThemeContext";
 import { useAuth } from "../context/AuthContext";
 import { useAppData } from "../context/AppDataContext";
 import Logo from "./LogoImage";
+import AiChatWidget from "./AiChatWidget";
 
 const DESKTOP_NAV_ITEMS = [
   { to: "/", label: "الرئيسية", icon: Home, end: true },
@@ -326,6 +327,9 @@ export default function Layout({ children }: { children: ReactNode }) {
           </button>
         </div>
       </nav>
+
+      {/* 🎓 المعلم الذكي — شات عائم */}
+      <AiChatWidget />
     </div>
   );
 }

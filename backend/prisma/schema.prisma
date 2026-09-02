@@ -31,6 +31,9 @@ model User {
   stats             UserStats?
   
   basicLessons      BasicLessonProgress[]
+
+  aiConversations   AiConversation[]
+  aiFeedbacks       AiFeedback[]
 }
 
 model Session {
@@ -270,4 +273,43 @@ model BasicLessonProgress {
 
   @@unique([userId, topicId])
   @@index([userId])
+}
+
+/**
+ * =========================================
+ * محادثات المعلم الذكي (AI)
+ * =========================================
+ * تحفظ آخر محادثة نشطة لكل طالب لاسترجاعها بعد إعادة التحميل
+ */
+model AiConversation {
+  id        String   @id @default(cuid())
+  userId    String
+  messages  Json     // مصفوفة { role, text }
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([updatedAt])
+}
+
+/**
+ * =========================================
+ * تقييمات إجابات المعلم الذكي
+ * =========================================
+ * لقياس جودة الإجابات (KPIs)
+ */
+model AiFeedback {
+  id           String   @id @default(cuid())
+  userId       String
+  messageIndex Int      @default(-1)
+  rating       String   // "up" أو "down"
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([rating])
+  @@index([createdAt])
 }

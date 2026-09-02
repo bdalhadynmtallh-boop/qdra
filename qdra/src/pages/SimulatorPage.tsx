@@ -30,11 +30,16 @@ import { cn } from "../utils/cn";
 const getApiUrl = () => {
   if (typeof window !== "undefined") {
     const hostname = window.location.hostname;
-    if (hostname.includes("vercel.app")) return "https://qdra-1.onrender.com";
+
+    if (hostname.includes("vercel.app")) {
+      return "https://qdra-1.onrender.com";
+    }
+
     if (hostname !== "localhost" && hostname !== "127.0.0.1") {
       return `http://${hostname}:3000`;
     }
   }
+
   return "http://localhost:3000";
 };
 
@@ -46,17 +51,27 @@ const API_BASE = getApiUrl();
 async function authFetch(url: string, options: RequestInit = {}) {
   const headers = new Headers(options.headers);
   const token = getStoredToken();
+
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  return fetch(url, { ...options, headers, credentials: "include" });
+
+  return fetch(url, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
 }
 
 function formatDuration(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds} ثانية`;
+
+  if (minutes === 0) {
+    return `${seconds} ثانية`;
+  }
+
   return `${minutes} دقيقة ${seconds} ثانية`;
 }
 
@@ -91,9 +106,11 @@ export default function SimulatorPage() {
   const [questionCount, setQuestionCount] = useState<number>(20);
   const [customQuestions, setCustomQuestions] = useState<string>("");
   const [isCustomQuestions, setIsCustomQuestions] = useState(false);
+
   const [timeLimitMinutes, setTimeLimitMinutes] = useState<number | null>(15);
   const [customTime, setCustomTime] = useState<string>("");
   const [isCustomTime, setIsCustomTime] = useState(false);
+
   const [isCustomSections, setIsCustomSections] = useState(false);
   const [sectionFrom, setSectionFrom] = useState<string>("1");
   const [sectionTo, setSectionTo] = useState<string>("256");
@@ -103,42 +120,71 @@ export default function SimulatorPage() {
   const [quizQuestions, setQuizQuestions] = useState<any[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [finished, setFinished] = useState(false);
-  const [runStats, setRunStats] = useState({ correct: 0, wrong: 0, timeMs: 0 });
+
+  const [runStats, setRunStats] = useState({
+    correct: 0,
+    wrong: 0,
+    timeMs: 0,
+  });
+
   const [categoryStats, setCategoryStats] = useState<CategoryStat[]>([]);
   const [startedAt, setStartedAt] = useState<number>(0);
+
   const [userAnswers, setUserAnswers] = useState<(UserAnswer | null)[]>([]);
 
   const [serverSections, setServerSections] = useState<SectionMeta[]>([]);
   const [metadataLoading, setMetadataLoading] = useState(true);
 
-  // ✅ استخدام authFetch لجلب metadata (يرسل التوكن تلقائياً)
+  // ========================================
+  // ✅ جلب metadata الأقسام
+  // ========================================
   useEffect(() => {
     let isMounted = true;
+
     async function fetchMetadata() {
       try {
         const res = await authFetch(`${API_BASE}/api/sections`);
+
         if (res.ok) {
           const data = await res.json();
-          if (isMounted && data.success && Array.isArray(data.sections)) {
+
+          if (
+            isMounted &&
+            data.success &&
+            Array.isArray(data.sections)
+          ) {
             setServerSections(data.sections);
           }
         }
       } catch (err) {
         console.error("فشل جلب metadata الأقسام:", err);
       } finally {
-        if (isMounted) setMetadataLoading(false);
+        if (isMounted) {
+          setMetadataLoading(false);
+        }
       }
     }
+
     fetchMetadata();
+
     return () => {
       isMounted = false;
     };
   }, []);
 
+  // ========================================
+  // 📊 حساب عدد الأسئلة المتاحة
+  // ========================================
   const availableCount = useMemo(() => {
     const from = parseInt(sectionFrom, 10);
     const to = parseInt(sectionTo, 10);
-    const rangeFrom = isCustomSections ? (!isNaN(from) && from > 0 ? from : 1) : 1;
+
+    const rangeFrom = isCustomSections
+      ? !isNaN(from) && from > 0
+        ? from
+        : 1
+      : 1;
+
     const rangeTo = isCustomSections
       ? !isNaN(to) && to > 0
         ? to
@@ -146,26 +192,57 @@ export default function SimulatorPage() {
       : sectionsMeta.length;
 
     return serverSections
-      .filter((s) => s.id >= rangeFrom && s.id <= rangeTo)
-      .reduce((sum, s) => sum + (s.questionCount || 0), 0);
-  }, [serverSections, isCustomSections, sectionFrom, sectionTo]);
+      .filter(
+        (s) =>
+          s.id >= rangeFrom &&
+          s.id <= rangeTo
+      )
+      .reduce(
+        (sum, s) =>
+          sum + (s.questionCount || 0),
+        0
+      );
+  }, [
+    serverSections,
+    isCustomSections,
+    sectionFrom,
+    sectionTo,
+  ]);
 
-  const userAnswersRef = useRef<(UserAnswer | null)[]>([]);
-  const finishHandledRef = useRef(false);
+  const userAnswersRef =
+    useRef<(UserAnswer | null)[]>([]);
 
+  const finishHandledRef =
+    useRef(false);
+
+  // ========================================
+  // 🚀 بدء المحاكي
+  // ========================================
   const startSimulator = async () => {
     if (availableCount === 0) return;
+
     setIsStarting(true);
 
     let finalCount = questionCount;
+
     if (isCustomQuestions) {
       const parsed = parseInt(customQuestions, 10);
-      finalCount = !isNaN(parsed) && parsed > 0 ? parsed : 10;
+
+      finalCount =
+        !isNaN(parsed) && parsed > 0
+          ? parsed
+          : 10;
     }
 
     const from = parseInt(sectionFrom, 10);
     const to = parseInt(sectionTo, 10);
-    const rangeFrom = isCustomSections ? (!isNaN(from) && from > 0 ? from : 1) : 1;
+
+    const rangeFrom = isCustomSections
+      ? !isNaN(from) && from > 0
+        ? from
+        : 1
+      : 1;
+
     const rangeTo = isCustomSections
       ? !isNaN(to) && to > 0
         ? to
@@ -174,45 +251,108 @@ export default function SimulatorPage() {
 
     const allQuestions: any[] = [];
 
-    // ⚠️ استخدم الأقسام الفعلية من السيرفر (وليس 301 معرّفة مسبقاً)
-    const sourceSections = serverSections.length > 0 ? serverSections : [];
-    const sectionsInRange = sourceSections
-      .filter((s) => s.id >= rangeFrom && s.id <= rangeTo);
+    // ========================================
+    // ⚠️ استخدام الأقسام الفعلية من السيرفر
+    // ========================================
+    const sourceSections =
+      serverSections.length > 0
+        ? serverSections
+        : [];
 
-    // 🔀 نخلط الأقسام ونأخذ عينة فقط حتى لا يتجاوز عدد الطلبات حد الـ rate limit
-    // (الخادم يسمح بـ 100 طلب/دقيقة). بحد أقصى 40 قسم يكفي لجمع العدد المطلوب.
+    const sectionsInRange =
+      sourceSections.filter(
+        (s) =>
+          s.id >= rangeFrom &&
+          s.id <= rangeTo
+      );
+
+    // ========================================
+    // 🔀 خلط الأقسام
+    // ========================================
     const MAX_FETCH_SECTIONS = 40;
-    const shuffledSections = [...sectionsInRange].sort(() => 0.5 - Math.random());
+
+    const shuffledSections =
+      [...sectionsInRange].sort(
+        () => 0.5 - Math.random()
+      );
+
     let needed = finalCount;
+
     const fetchSections: SectionMeta[] = [];
+
     for (const s of shuffledSections) {
       fetchSections.push(s);
+
       needed -= s.questionCount || 0;
-      if (fetchSections.length >= MAX_FETCH_SECTIONS || needed <= 0) break;
+
+      if (
+        fetchSections.length >=
+          MAX_FETCH_SECTIONS ||
+        needed <= 0
+      ) {
+        break;
+      }
     }
 
-    // ✅ جلب الأسئلة بالتوازي (بدل التسلسل) حتى لا يعلق "جاري تحضير الاختبار"
+    // ========================================
+    // 📥 جلب الأسئلة بالتوازي
+    // ========================================
     const results = await Promise.all(
       fetchSections.map(async (sec) => {
         try {
-          const questions = await loadSectionQuestions(sec.id);
-          return { sectionId: sec.id, questions: Array.isArray(questions) ? questions : [] };
+          const questions =
+            await loadSectionQuestions(sec.id);
+
+          return {
+            sectionId: sec.id,
+            questions: Array.isArray(questions)
+              ? questions
+              : [],
+          };
         } catch (err) {
-          console.warn(`تجاوز القسم ${sec.id} (تعذر جلب الأسئلة)`);
-          return { sectionId: sec.id, questions: [] };
+          console.warn(
+            `تجاوز القسم ${sec.id} (تعذر جلب الأسئلة)`
+          );
+
+          return {
+            sectionId: sec.id,
+            questions: [],
+          };
         }
       })
     );
 
-    for (const { sectionId, questions } of results) {
+    // ========================================
+    // 🧩 دمج الأسئلة
+    // ========================================
+    for (const {
+      sectionId,
+      questions,
+    } of results) {
       if (questions.length > 0) {
-        const meta = sectionsMeta.find((m) => m.id === sectionId);
+        const meta = sectionsMeta.find(
+          (m) => m.id === sectionId
+        );
+
         questions.forEach((q) => {
           if (q && q.question) {
             allQuestions.push({
               ...q,
+
+              // ========================================
+              // ⭐ مهم:
+              // الاحتفاظ بالقطعة كما هي داخل السؤال
+              // ========================================
+              passage:
+                typeof q.passage === "string"
+                  ? q.passage
+                  : "",
+
               sectionId,
-              sectionTitle: meta?.name || `القسم ${sectionId}`,
+
+              sectionTitle:
+                meta?.name ||
+                `القسم ${sectionId}`,
             });
           }
         });
@@ -224,32 +364,77 @@ export default function SimulatorPage() {
       return;
     }
 
-    const shuffled = [...allQuestions].sort(() => 0.5 - Math.random());
-    const limit = Math.min(finalCount, shuffled.length);
-    const selected = shuffled.slice(0, limit);
-    const emptyAnswers = new Array(selected.length).fill(null);
+    // ========================================
+    // 🔀 خلط الأسئلة
+    // ========================================
+    const shuffled =
+      [...allQuestions].sort(
+        () => 0.5 - Math.random()
+      );
+
+    const limit = Math.min(
+      finalCount,
+      shuffled.length
+    );
+
+    const selected =
+      shuffled.slice(0, limit);
+
+    const emptyAnswers =
+      new Array(selected.length).fill(null);
 
     setQuizQuestions(selected);
     setUserAnswers(emptyAnswers);
-    userAnswersRef.current = emptyAnswers;
+
+    userAnswersRef.current =
+      emptyAnswers;
+
     setCurrentIndex(0);
     setFinished(false);
-    setRunStats({ correct: 0, wrong: 0, timeMs: 0 });
+
+    setRunStats({
+      correct: 0,
+      wrong: 0,
+      timeMs: 0,
+    });
+
     setCategoryStats([]);
     setStartedAt(Date.now());
+
     finishHandledRef.current = false;
+
     setIsStarted(true);
     setIsStarting(false);
   };
 
+  // ========================================
+  // ⏱️ المدة
+  // ========================================
   const effectiveTimeLimit = useMemo(() => {
-    if (!isCustomTime) return timeLimitMinutes;
-    const parsed = parseInt(customTime, 10);
-    return !isNaN(parsed) && parsed > 0 ? parsed : null;
-  }, [isCustomTime, customTime, timeLimitMinutes]);
+    if (!isCustomTime) {
+      return timeLimitMinutes;
+    }
 
-  const currentQuestion = quizQuestions[currentIndex];
+    const parsed = parseInt(
+      customTime,
+      10
+    );
 
+    return !isNaN(parsed) && parsed > 0
+      ? parsed
+      : null;
+  }, [
+    isCustomTime,
+    customTime,
+    timeLimitMinutes,
+  ]);
+
+  const currentQuestion =
+    quizQuestions[currentIndex];
+
+  // ========================================
+  // ✅ تسجيل الإجابة
+  // ========================================
   const handleAnswered = (
     selectedAnswer: number,
     correctAnswer: number,
@@ -257,6 +442,7 @@ export default function SimulatorPage() {
     timeMs: number
   ) => {
     if (!currentQuestion) return;
+
     const answer: UserAnswer = {
       question: currentQuestion,
       correct,
@@ -264,43 +450,97 @@ export default function SimulatorPage() {
       selectedAnswer,
       correctAnswer,
     };
-    const updated = [...userAnswersRef.current];
+
+    const updated = [
+      ...userAnswersRef.current,
+    ];
+
     updated[currentIndex] = answer;
-    userAnswersRef.current = updated;
+
+    userAnswersRef.current =
+      updated;
+
     setUserAnswers(updated);
   };
 
-  const jumpToQuestion = (index: number) => {
-    if (index >= 0 && index < quizQuestions.length) {
+  // ========================================
+  // 🔢 الانتقال إلى سؤال
+  // ========================================
+  const jumpToQuestion = (
+    index: number
+  ) => {
+    if (
+      index >= 0 &&
+      index < quizQuestions.length
+    ) {
       setCurrentIndex(index);
     }
   };
 
+  // ========================================
+  // 📊 الأسئلة المجاب عنها
+  // ========================================
   const answeredIndices = useMemo(() => {
-    return userAnswers.map((ans, i) => (ans !== null ? i : -1)).filter((i) => i !== -1);
+    return userAnswers
+      .map((ans, i) =>
+        ans !== null ? i : -1
+      )
+      .filter(
+        (i) => i !== -1
+      );
   }, [userAnswers]);
 
+  // ========================================
+  // 🏁 إنهاء المحاكي
+  // ========================================
   const finishQuiz = () => {
-    if (finishHandledRef.current) return;
+    if (finishHandledRef.current) {
+      return;
+    }
+
     finishHandledRef.current = true;
 
-    const totalTime = Date.now() - startedAt;
+    const totalTime =
+      Date.now() - startedAt;
+
     let correctCount = 0;
     let wrongCount = 0;
-    const catMap: Record<string, { correct: number; total: number }> = {};
-    const answers = userAnswersRef.current;
+
+    const catMap: Record<
+      string,
+      {
+        correct: number;
+        total: number;
+      }
+    > = {};
+
+    const answers =
+      userAnswersRef.current;
 
     answers.forEach((item) => {
       if (!item) return;
-      const categoryName = item.question.category || item.question.sectionTitle || "عام";
-      if (!catMap[categoryName]) catMap[categoryName] = { correct: 0, total: 0 };
+
+      const categoryName =
+        item.question.category ||
+        item.question.sectionTitle ||
+        "عام";
+
+      if (!catMap[categoryName]) {
+        catMap[categoryName] = {
+          correct: 0,
+          total: 0,
+        };
+      }
+
       catMap[categoryName].total += 1;
+
       if (item.correct) {
         correctCount += 1;
         catMap[categoryName].correct += 1;
       } else {
         wrongCount += 1;
       }
+
       recordAnswer(
         item.question.sectionId,
         item.question.id,
@@ -311,48 +551,106 @@ export default function SimulatorPage() {
       );
     });
 
-    const catStatsArray: CategoryStat[] = Object.keys(catMap).map((cat) => ({
-      categoryName: cat,
-      correct: catMap[cat].correct,
-      total: catMap[cat].total,
-    }));
+    const catStatsArray: CategoryStat[] =
+      Object.keys(catMap).map(
+        (cat) => ({
+          categoryName: cat,
+          correct:
+            catMap[cat].correct,
+          total:
+            catMap[cat].total,
+        })
+      );
 
-    setRunStats({ correct: correctCount, wrong: wrongCount, timeMs: totalTime });
-    setCategoryStats(catStatsArray);
+    setRunStats({
+      correct: correctCount,
+      wrong: wrongCount,
+      timeMs: totalTime,
+    });
+
+    setCategoryStats(
+      catStatsArray
+    );
+
     setFinished(true);
 
     submitSimulatorAttempt({
-      totalQuestions: quizQuestions.length,
-      correctAnswers: correctCount,
-      wrongAnswers: wrongCount,
-      score: quizQuestions.length > 0 ? Math.round((correctCount / quizQuestions.length) * 100) : 0,
-      startedAt: new Date(startedAt).toISOString(),
-      completedAt: new Date().toISOString(),
+      totalQuestions:
+        quizQuestions.length,
+
+      correctAnswers:
+        correctCount,
+
+      wrongAnswers:
+        wrongCount,
+
+      score:
+        quizQuestions.length > 0
+          ? Math.round(
+              (correctCount /
+                quizQuestions.length) *
+                100
+            )
+          : 0,
+
+      startedAt:
+        new Date(
+          startedAt
+        ).toISOString(),
+
+      completedAt:
+        new Date().toISOString(),
     }).catch((err) => {
-      console.error("فشل حفظ نتيجة المحاكي:", err);
+      console.error(
+        "فشل حفظ نتيجة المحاكي:",
+        err
+      );
     });
   };
 
+  // ========================================
+  // ➡️ السؤال التالي
+  // ========================================
   const goNext = () => {
-    if (currentIndex + 1 >= quizQuestions.length) {
+    if (
+      currentIndex + 1 >=
+      quizQuestions.length
+    ) {
       finishQuiz();
     } else {
-      setCurrentIndex((i) => i + 1);
+      setCurrentIndex(
+        (i) => i + 1
+      );
     }
   };
 
+  // ========================================
+  // ⏳ جاري التحضير
+  // ========================================
   if (isStarting) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
-        <Loader2 size={36} className="animate-spin text-gold-400" />
+        <Loader2
+          size={36}
+          className="animate-spin text-gold-400"
+        />
+
         <div>
-          <p className="text-sm font-bold text-ink-50">جاري تحضير الاختبار...</p>
-          <p className="mt-1 text-xs text-ink-400">يتم جلب الأسئلة من السيرفر الآمن</p>
+          <p className="text-sm font-bold text-ink-50">
+            جاري تحضير الاختبار...
+          </p>
+
+          <p className="mt-1 text-xs text-ink-400">
+            يتم جلب الأسئلة من السيرفر الآمن
+          </p>
         </div>
       </div>
     );
   }
 
+  // ========================================
+  // ⚙️ إعدادات المحاكي
+  // ========================================
   if (!isStarted) {
     return (
       <div className="animate-fade-in-up mx-auto flex max-w-xl flex-col gap-6 py-6">
@@ -360,40 +658,62 @@ export default function SimulatorPage() {
           <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-gold-500/20 bg-gold-500/10 text-gold-400">
             <Sparkles size={28} />
           </div>
-          <h1 className="text-2xl font-extrabold text-ink-50 md:text-3xl">محاكي الاختبار الشامل</h1>
+
+          <h1 className="text-2xl font-extrabold text-ink-50 md:text-3xl">
+            محاكي الاختبار الشامل
+          </h1>
+
           <p className="mt-2 text-sm text-ink-300">
             اختبار محاكاة يسحب أسئلة بشكل عشوائي من كافة الأقسام لتقييم مستواك الفعلي.
           </p>
         </div>
 
         <div className="glass-card flex flex-col gap-6 rounded-3xl p-6">
+          {/* نطاق الأقسام */}
           <div>
             <label className="mb-2 flex items-center gap-2 text-sm font-bold text-ink-100">
-              <LayoutGrid size={18} className="text-gold-400" />
+              <LayoutGrid
+                size={18}
+                className="text-gold-400"
+              />
               نطاق الأقسام
             </label>
+
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => setIsCustomSections(false)}
+                onClick={() =>
+                  setIsCustomSections(false)
+                }
                 className={cn(
                   "press rounded-xl border py-2.5 text-xs font-bold transition-colors",
-                  !isCustomSections ? "border-gold-500/50 bg-gold-500/20 text-gold-300" : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
+
+                  !isCustomSections
+                    ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
+                    : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
                 )}
               >
                 من كل الأقسام
               </button>
+
               <button
                 type="button"
-                onClick={() => setIsCustomSections(true)}
+                onClick={() =>
+                  setIsCustomSections(true)
+                }
                 className={cn(
                   "press flex items-center justify-center gap-1 rounded-xl border py-2.5 text-xs font-bold transition-colors",
-                  isCustomSections ? "border-gold-500/50 bg-gold-500/20 text-gold-300" : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
+
+                  isCustomSections
+                    ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
+                    : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
                 )}
               >
-                <Settings2 size={13} /> تخصيص
+                <Settings2 size={13} />
+                تخصيص
               </button>
             </div>
+
             {isCustomSections && (
               <div className="mt-3 grid animate-pop-in grid-cols-2 gap-3">
                 <input
@@ -401,16 +721,25 @@ export default function SimulatorPage() {
                   min="1"
                   max={sectionsMeta.length}
                   value={sectionFrom}
-                  onChange={(e) => setSectionFrom(e.target.value)}
+                  onChange={(e) =>
+                    setSectionFrom(
+                      e.target.value
+                    )
+                  }
                   placeholder="من القسم (مثال: 10)"
                   className="w-full rounded-xl border border-gold-500/30 bg-ink-900/80 px-4 py-2.5 text-sm text-ink-50 outline-none focus:border-gold-400"
                 />
+
                 <input
                   type="number"
                   min="1"
                   max={sectionsMeta.length}
                   value={sectionTo}
-                  onChange={(e) => setSectionTo(e.target.value)}
+                  onChange={(e) =>
+                    setSectionTo(
+                      e.target.value
+                    )
+                  }
                   placeholder="إلى القسم (مثال: 20)"
                   className="w-full rounded-xl border border-gold-500/30 bg-ink-900/80 px-4 py-2.5 text-sm text-ink-50 outline-none focus:border-gold-400"
                 />
@@ -418,40 +747,70 @@ export default function SimulatorPage() {
             )}
           </div>
 
+          {/* عدد الأسئلة */}
           <div>
             <label className="mb-2 flex items-center justify-between text-sm font-bold text-ink-100">
               <span className="flex items-center gap-2">
-                <HelpCircle size={18} className="text-gold-400" />
+                <HelpCircle
+                  size={18}
+                  className="text-gold-400"
+                />
                 عدد الأسئلة
               </span>
+
               <span className="text-xs font-normal text-ink-400">
-                {metadataLoading ? "جاري الحساب..." : `(المتوفر: ${availableCount})`}
+                {metadataLoading
+                  ? "جاري الحساب..."
+                  : `(المتوفر: ${availableCount})`}
               </span>
             </label>
 
             <div className="grid grid-cols-5 gap-2">
-              {[10, 20, 30, 50].map((count) => (
-                <button
-                  key={count}
-                  type="button"
-                  onClick={() => { setQuestionCount(count); setIsCustomQuestions(false); }}
-                  className={cn(
-                    "press rounded-xl border py-2.5 text-xs font-bold transition-colors",
-                    !isCustomQuestions && questionCount === count ? "border-gold-500/50 bg-gold-500/20 text-gold-300" : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
-                  )}
-                >
-                  {count}
-                </button>
-              ))}
+              {[10, 20, 30, 50].map(
+                (count) => (
+                  <button
+                    key={count}
+                    type="button"
+                    onClick={() => {
+                      setQuestionCount(
+                        count
+                      );
+                      setIsCustomQuestions(
+                        false
+                      );
+                    }}
+                    className={cn(
+                      "press rounded-xl border py-2.5 text-xs font-bold transition-colors",
+
+                      !isCustomQuestions &&
+                        questionCount ===
+                          count
+                        ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
+                        : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
+                    )}
+                  >
+                    {count}
+                  </button>
+                )
+              )}
+
               <button
                 type="button"
-                onClick={() => setIsCustomQuestions(true)}
+                onClick={() =>
+                  setIsCustomQuestions(
+                    true
+                  )
+                }
                 className={cn(
                   "press flex items-center justify-center gap-1 rounded-xl border py-2.5 text-xs font-bold transition-colors",
-                  isCustomQuestions ? "border-gold-500/50 bg-gold-500/20 text-gold-300" : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
+
+                  isCustomQuestions
+                    ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
+                    : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
                 )}
               >
-                <Settings2 size={13} /> تخصيص
+                <Settings2 size={13} />
+                تخصيص
               </button>
             </div>
 
@@ -460,9 +819,18 @@ export default function SimulatorPage() {
                 <input
                   type="number"
                   min="1"
-                  max={availableCount || 1000}
-                  value={customQuestions}
-                  onChange={(e) => setCustomQuestions(e.target.value)}
+                  max={
+                    availableCount ||
+                    1000
+                  }
+                  value={
+                    customQuestions
+                  }
+                  onChange={(e) =>
+                    setCustomQuestions(
+                      e.target.value
+                    )
+                  }
                   placeholder="أدخل عدد الأسئلة (مثال: 15)"
                   className="w-full rounded-xl border border-gold-500/30 bg-ink-900/80 px-4 py-2.5 text-sm text-ink-50 outline-none focus:border-gold-400"
                 />
@@ -470,48 +838,91 @@ export default function SimulatorPage() {
             )}
           </div>
 
+          {/* المدة */}
           <div>
             <label className="mb-2 flex items-center gap-2 text-sm font-bold text-ink-100">
-              <Clock size={18} className="text-gold-400" />
+              <Clock
+                size={18}
+                className="text-gold-400"
+              />
               المدة الزمنية
             </label>
+
             <div className="grid grid-cols-5 gap-2">
               {[
-                { label: "5 د", value: 5 },
-                { label: "15 د", value: 15 },
-                { label: "30 د", value: 30 },
-                { label: "بدون", value: null },
+                {
+                  label: "5 د",
+                  value: 5,
+                },
+                {
+                  label: "15 د",
+                  value: 15,
+                },
+                {
+                  label: "30 د",
+                  value: 30,
+                },
+                {
+                  label: "بدون",
+                  value: null,
+                },
               ].map((opt) => (
                 <button
                   key={opt.label}
                   type="button"
-                  onClick={() => { setTimeLimitMinutes(opt.value); setIsCustomTime(false); }}
+                  onClick={() => {
+                    setTimeLimitMinutes(
+                      opt.value
+                    );
+                    setIsCustomTime(
+                      false
+                    );
+                  }}
                   className={cn(
                     "press rounded-xl border py-2.5 text-xs font-bold transition-colors",
-                    !isCustomTime && timeLimitMinutes === opt.value ? "border-gold-500/50 bg-gold-500/20 text-gold-300" : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
+
+                    !isCustomTime &&
+                      timeLimitMinutes ===
+                        opt.value
+                      ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
+                      : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
                   )}
                 >
                   {opt.label}
                 </button>
               ))}
+
               <button
                 type="button"
-                onClick={() => setIsCustomTime(true)}
+                onClick={() =>
+                  setIsCustomTime(
+                    true
+                  )
+                }
                 className={cn(
                   "press flex items-center justify-center gap-1 rounded-xl border py-2.5 text-xs font-bold transition-colors",
-                  isCustomTime ? "border-gold-500/50 bg-gold-500/20 text-gold-300" : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
+
+                  isCustomTime
+                    ? "border-gold-500/50 bg-gold-500/20 text-gold-300"
+                    : "border-white/10 bg-white/5 text-ink-300 hover:text-ink-50"
                 )}
               >
-                <Settings2 size={13} /> تخصيص
+                <Settings2 size={13} />
+                تخصيص
               </button>
             </div>
+
             {isCustomTime && (
               <div className="mt-3 animate-pop-in">
                 <input
                   type="number"
                   min="1"
                   value={customTime}
-                  onChange={(e) => setCustomTime(e.target.value)}
+                  onChange={(e) =>
+                    setCustomTime(
+                      e.target.value
+                    )
+                  }
                   placeholder="أدخل الوقت بالدقائق (مثال: 10)"
                   className="w-full rounded-xl border border-gold-500/30 bg-ink-900/80 px-4 py-2.5 text-sm text-ink-50 outline-none focus:border-gold-400"
                 />
@@ -519,59 +930,128 @@ export default function SimulatorPage() {
             )}
           </div>
 
+          {/* بدء */}
           <button
             onClick={startSimulator}
-            disabled={availableCount === 0 || metadataLoading}
+            disabled={
+              availableCount === 0 ||
+              metadataLoading
+            }
             className="btn-gold press mt-2 flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-base font-bold disabled:opacity-50"
           >
             <Play size={20} />
-            {metadataLoading ? "جاري التحميل..." : availableCount === 0 ? "لا توجد أسئلة متوفرة" : "بدء الاختبار المحاكي"}
+
+            {metadataLoading
+              ? "جاري التحميل..."
+              : availableCount === 0
+                ? "لا توجد أسئلة متوفرة"
+                : "بدء الاختبار المحاكي"}
           </button>
 
-          {availableCount === 0 && !metadataLoading && (
-            <p className="text-center text-[11px] leading-6 text-ink-400">
-              تأكد من تسجيل الدخول وأن اشتراكك فعّال للوصول إلى الأسئلة.
-            </p>
-          )}
+          {availableCount === 0 &&
+            !metadataLoading && (
+              <p className="text-center text-[11px] leading-6 text-ink-400">
+                تأكد من تسجيل الدخول وأن اشتراكك فعّال للوصول إلى الأسئلة.
+              </p>
+            )}
         </div>
       </div>
     );
   }
 
+  // ========================================
+  // 🏆 النتيجة
+  // ========================================
   if (finished) {
-    const total = quizQuestions.length;
-    const percent = total > 0 ? Math.round((runStats.correct / total) * 100) : 0;
+    const total =
+      quizQuestions.length;
+
+    const percent =
+      total > 0
+        ? Math.round(
+            (runStats.correct /
+              total) *
+              100
+          )
+        : 0;
 
     return (
       <div className="animate-pop-in mx-auto flex max-w-xl flex-col items-center gap-6 py-8 text-center">
         <span className="flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-gold-300 to-gold-700 text-ink-950 shadow-2xl shadow-gold-900/40">
           <Trophy size={34} />
         </span>
+
         <div>
-          <h1 className="text-2xl font-extrabold text-ink-50">أنجزت أداءً رائعاً!</h1>
-          <p className="mt-2 text-sm text-ink-300">ملخص أدائك في المحاكي الشامل</p>
+          <h1 className="text-2xl font-extrabold text-ink-50">
+            أنجزت أداءً رائعاً!
+          </h1>
+
+          <p className="mt-2 text-sm text-ink-300">
+            ملخص أدائك في المحاكي الشامل
+          </p>
         </div>
 
         <div className="glass-card grid w-full grid-cols-2 gap-4 rounded-3xl p-6 md:grid-cols-4">
           <div className="flex flex-col items-center gap-1">
-            <Percent className="text-gold-400" size={20} />
-            <span className="text-xl font-extrabold text-ink-50">{percent}%</span>
-            <span className="text-xs text-ink-400">النسبة المئوية</span>
+            <Percent
+              className="text-gold-400"
+              size={20}
+            />
+
+            <span className="text-xl font-extrabold text-ink-50">
+              {percent}%
+            </span>
+
+            <span className="text-xs text-ink-400">
+              النسبة المئوية
+            </span>
           </div>
+
           <div className="flex flex-col items-center gap-1">
-            <CheckCircle2 className="text-emerald-400" size={20} />
-            <span className="text-xl font-extrabold text-ink-50">{runStats.correct}</span>
-            <span className="text-xs text-ink-400">إجابات صحيحة</span>
+            <CheckCircle2
+              className="text-emerald-400"
+              size={20}
+            />
+
+            <span className="text-xl font-extrabold text-ink-50">
+              {runStats.correct}
+            </span>
+
+            <span className="text-xs text-ink-400">
+              إجابات صحيحة
+            </span>
           </div>
+
           <div className="flex flex-col items-center gap-1">
-            <XCircle className="text-red-400" size={20} />
-            <span className="text-xl font-extrabold text-ink-50">{runStats.wrong}</span>
-            <span className="text-xs text-ink-400">إجابات خاطئة</span>
+            <XCircle
+              className="text-red-400"
+              size={20}
+            />
+
+            <span className="text-xl font-extrabold text-ink-50">
+              {runStats.wrong}
+            </span>
+
+            <span className="text-xs text-ink-400">
+              إجابات خاطئة
+            </span>
           </div>
+
           <div className="flex flex-col items-center gap-1">
-            <Clock className="text-gold-400" size={20} />
-            <span className="text-xl font-extrabold text-ink-50">{formatDuration(runStats.timeMs)}</span>
-            <span className="text-xs text-ink-400">الوقت المستغرق</span>
+            <Clock
+              className="text-gold-400"
+              size={20}
+            />
+
+            <span className="text-xl font-extrabold text-ink-50">
+              {formatDuration(
+                runStats.timeMs
+              )}
+            </span>
+
+            <span className="text-xs text-ink-400">
+              الوقت المستغرق
+            </span>
           </div>
         </div>
 
@@ -579,39 +1059,74 @@ export default function SimulatorPage() {
           <div className="glass-card flex w-full flex-col gap-3 rounded-3xl p-6 text-right">
             <div className="mb-2 flex items-center gap-2 text-sm font-bold text-gold-300">
               <BarChart3 size={18} />
-              <span>الأداء حسب الموضوع:</span>
+              <span>
+                الأداء حسب الموضوع:
+              </span>
             </div>
+
             <div className="flex flex-col gap-3">
-              {categoryStats.map((cat, idx) => {
-                const catPercent = Math.round((cat.correct / cat.total) * 100);
-                return (
-                  <div key={idx} className="flex flex-col gap-1.5 rounded-2xl border border-white/5 bg-white/5 p-3.5">
-                    <div className="flex items-center justify-between text-xs font-bold">
-                      <span className="text-ink-50">{cat.categoryName}</span>
-                      <span className="text-gold-400">{cat.correct} من {cat.total} ({catPercent}%)</span>
+              {categoryStats.map(
+                (cat, idx) => {
+                  const catPercent =
+                    Math.round(
+                      (cat.correct /
+                        cat.total) *
+                        100
+                    );
+
+                  return (
+                    <div
+                      key={idx}
+                      className="flex flex-col gap-1.5 rounded-2xl border border-white/5 bg-white/5 p-3.5"
+                    >
+                      <div className="flex items-center justify-between text-xs font-bold">
+                        <span className="text-ink-50">
+                          {
+                            cat.categoryName
+                          }
+                        </span>
+
+                        <span className="text-gold-400">
+                          {cat.correct} من{" "}
+                          {cat.total} (
+                          {
+                            catPercent
+                          }
+                          %)
+                        </span>
+                      </div>
+
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-black/30">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-l from-gold-300 to-gold-500 transition-all duration-500"
+                          style={{
+                            width: `${catPercent}%`,
+                          }}
+                        />
+                      </div>
                     </div>
-                    <div className="h-2 w-full overflow-hidden rounded-full bg-black/30">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-l from-gold-300 to-gold-500 transition-all duration-500"
-                        style={{ width: `${catPercent}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                }
+              )}
             </div>
           </div>
         )}
 
         <div className="flex flex-wrap items-center justify-center gap-3">
           <button
-            onClick={startSimulator}
+            onClick={
+              startSimulator
+            }
             className="btn-gold press flex items-center gap-2 rounded-2xl px-6 py-3 text-sm"
           >
-            <RotateCcw size={16} /> محاكي جديد
+            <RotateCcw size={16} />
+            محاكي جديد
           </button>
+
           <button
-            onClick={() => setIsStarted(false)}
+            onClick={() =>
+              setIsStarted(false)
+            }
             className="press flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-6 py-3 text-sm font-bold text-ink-100 hover:bg-white/10"
           >
             تغيير الإعدادات
@@ -621,43 +1136,126 @@ export default function SimulatorPage() {
     );
   }
 
+  // ========================================
+  // 📝 الاختبار
+  // ========================================
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
         <button
-          onClick={() => finishQuiz()}
+          onClick={() =>
+            finishQuiz()
+          }
           className="press flex items-center gap-1.5 text-sm font-bold text-ink-300 hover:text-gold-300"
         >
-          <ArrowRight size={16} /> إنهاء الاختبار
+          <ArrowRight size={16} />
+          إنهاء الاختبار
         </button>
+
         <span className="rounded-full border border-gold-500/20 bg-gold-500/10 px-3 py-1 text-xs font-bold text-gold-400">
           المحاكي الشامل
         </span>
       </div>
 
-      {effectiveTimeLimit !== null && (
+      {effectiveTimeLimit !==
+        null && (
         <QuizTimer
           key={`simulator-${startedAt}`}
-          durationInSeconds={effectiveTimeLimit * 60}
-          onExpire={finishQuiz}
+          durationInSeconds={
+            effectiveTimeLimit * 60
+          }
+          onExpire={
+            finishQuiz
+          }
         />
       )}
 
       {currentQuestion ? (
         <QuestionView
           key={`${currentQuestion.sectionId}-${currentQuestion.id}-${currentIndex}`}
-          question={currentQuestion}
-          questionNumber={currentIndex + 1}
-          totalQuestions={quizQuestions.length}
-          isFavorite={isFavorite(currentQuestion.sectionId, currentQuestion.id)}
-          onToggleFavorite={() => toggleFavorite(currentQuestion.sectionId, currentQuestion.id)}
-          onAnswered={handleAnswered}
+          question={
+            currentQuestion
+          }
+          questionNumber={
+            currentIndex + 1
+          }
+          totalQuestions={
+            quizQuestions.length
+          }
+          isFavorite={isFavorite(
+            currentQuestion.sectionId,
+            currentQuestion.id
+          )}
+          onToggleFavorite={() =>
+            toggleFavorite(
+              currentQuestion.sectionId,
+              currentQuestion.id
+            )
+          }
+          onAnswered={
+            handleAnswered
+          }
           onNext={goNext}
-          answeredIndices={answeredIndices}
-          onJumpToQuestion={jumpToQuestion}
+          answeredIndices={
+            answeredIndices
+          }
+          onJumpToQuestion={
+            jumpToQuestion
+          }
+
+          // ========================================
+          // 🎓 المعلم الذكي
+          // ========================================
+          onAskTeacher={() => {
+            /*
+             * نرسل للسؤال الحالي كل المعلومات المهمة:
+             *
+             * 1. السؤال
+             * 2. الخيارات
+             * 3. الإجابة الصحيحة
+             * 4. التصنيف
+             * 5. قطعة الاستيعاب كاملة
+             *
+             * هذا مهم جدًا لأسئلة استيعاب المقروء،
+             * لأن السؤال وحده لا يكفي لفهمه.
+             */
+            window.dispatchEvent(
+              new CustomEvent(
+                "qdra:ask-teacher",
+                {
+                  detail: {
+                    question:
+                      currentQuestion.question,
+
+                    options:
+                      currentQuestion.options ||
+                      [],
+
+                    correctIndex:
+                      currentQuestion.correctIndex ??
+                      -1,
+
+                    category:
+                      currentQuestion.category ||
+                      currentQuestion.sectionTitle ||
+                      "عام",
+
+                    // ⭐ التعديل الأساسي
+                    passage:
+                      typeof currentQuestion.passage ===
+                      "string"
+                        ? currentQuestion.passage
+                        : "",
+                  },
+                }
+              )
+            );
+          }}
         />
       ) : (
-        <div className="py-10 text-center text-ink-300">جاري تحميل السؤال...</div>
+        <div className="py-10 text-center text-ink-300">
+          جاري تحميل السؤال...
+        </div>
       )}
     </div>
   );

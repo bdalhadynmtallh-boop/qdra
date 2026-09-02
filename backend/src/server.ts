@@ -19,6 +19,7 @@ import { adminRoutes } from "./routes/admin.js";
 import { progressRoutes } from "./routes/progress.js";
 import { simulatorRoutes } from "./routes/simulator.js";
 import { pdfRoutes } from "./routes/pdfs.js";
+import { aiRoutes } from "./routes/ai.js";
 
 const app = Fastify({
   logger: {
@@ -161,6 +162,7 @@ await app.register(adminRoutes, {
 await app.register(progressRoutes, { prefix: "/api/progress" });
 await app.register(simulatorRoutes, { prefix: "/api/simulator" });
 await app.register(pdfRoutes, { prefix: "/api" });
+await app.register(aiRoutes, { prefix: "/api" });
 await app.register(healthRoutes, { prefix: "/api" });
 
 // ========================================
