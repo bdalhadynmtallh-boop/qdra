@@ -4,45 +4,57 @@ import { FastifyInstance } from "fastify";
    🎓 المعلم الذكي في قُدرة — معلم شخصي متكيف
 
    ترتيب النماذج:
-   1) Gemini 3.7 Flash      — حد داخلي 20 طلباً يومياً
-   2) Gemini 3.5 Flash Lite — حد داخلي 500
-   3) Gemini 3.1 Flash Lite — حد داخلي 500
+   1) Gemini 3.7 Flash      — 20 طلباً يومياً
+   2) Gemini 3.6 Flash      — 20 طلباً يومياً
+   3) Gemini 3.5 Flash      — 20 طلباً يومياً
+   4) Gemini 3.5 Flash Lite — 500 طلب يومياً
+   5) Gemini 3.1 Flash Lite — 500 طلب يومياً
 
    المميزات:
    - Adaptive Teaching حسب مستوى الطالب
    - قراءة أداء الطالب الحقيقي من QuestionAttempt
-   - تحليل الأداء حسب category مثل صفحة نتائج الاختبار
+   - تحليل الأداء حسب category
    - الاعتماد على الأداء الحديث في كل مهارة
    - تخصيص حسب المهارة الحالية
    - شرح تأسيسي للطالب المتعثر
    - شرح مختصر للطالب المتمكن
    - إعادة شرح بطريقة أبسط عند عدم الفهم
    - منع اختراع الأسئلة والخيارات
-   - Failover تلقائي بين النماذج
+   - Failover تلقائي بين 5 نماذج
 ========================================================= */
 
 // =========================================================
 // 🤖 نماذج Gemini
 // =========================================================
 
-const PRIMARY_MODEL = "gemini-3.7-flash";
-const SECONDARY_MODEL = "gemini-3.5-flash-lite";
-const FALLBACK_MODEL = "gemini-3.1-flash-lite";
+const MODEL_37_FLASH = "gemini-3.7-flash";
+const MODEL_36_FLASH = "gemini-3.6-flash";
+const MODEL_35_FLASH = "gemini-3.5-flash";
+const MODEL_35_FLASH_LITE = "gemini-3.5-flash-lite";
+const MODEL_31_FLASH_LITE = "gemini-3.1-flash-lite";
 
 // =========================================================
 // 📊 الحدود اليومية
 // =========================================================
 
-const PRIMARY_DAILY_CAP = Number(
+const MODEL_37_DAILY_CAP = Number(
   process.env.GEMINI_37_DAILY_CAP || 20
 );
 
-const SECONDARY_DAILY_CAP = Number(
-  process.env.GEMINI_35_DAILY_CAP || 500
+const MODEL_36_DAILY_CAP = Number(
+  process.env.GEMINI_36_DAILY_CAP || 20
 );
 
-const FALLBACK_DAILY_CAP = Number(
-  process.env.GEMINI_31_DAILY_CAP || 500
+const MODEL_35_DAILY_CAP = Number(
+  process.env.GEMINI_35_FLASH_DAILY_CAP || 20
+);
+
+const MODEL_35_LITE_DAILY_CAP = Number(
+  process.env.GEMINI_35_LITE_DAILY_CAP || 500
+);
+
+const MODEL_31_LITE_DAILY_CAP = Number(
+  process.env.GEMINI_31_LITE_DAILY_CAP || 500
 );
 
 const QUOTA_WARNING_THRESHOLD = 0.9;
@@ -51,16 +63,38 @@ const GEMINI_STREAM_URL_FOR = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
 
 // =========================================================
+// 🤖 ترتيب النماذج
+// =========================================================
+
+const GEMINI_MODELS = [
+  {
+    model: MODEL_37_FLASH,
+    cap: MODEL_37_DAILY_CAP,
+  },
+  {
+    model: MODEL_36_FLASH,
+    cap: MODEL_36_DAILY_CAP,
+  },
+  {
+    model: MODEL_35_FLASH,
+    cap: MODEL_35_DAILY_CAP,
+  },
+  {
+    model: MODEL_35_FLASH_LITE,
+    cap: MODEL_35_LITE_DAILY_CAP,
+  },
+  {
+    model: MODEL_31_FLASH_LITE,
+    cap: MODEL_31_LITE_DAILY_CAP,
+  },
+] as const;
+
+// =========================================================
 // 📊 إعدادات تحليل مستوى الطالب
 // =========================================================
 
-// آخر كم محاولة إجمالاً نقرأها من قاعدة البيانات
 const STUDENT_PROFILE_ATTEMPT_LIMIT = 300;
-
-// آخر كم محاولة في كل مهارة نعتمد عليها للمستوى الحالي
 const RECENT_SKILL_ATTEMPT_LIMIT = 20;
-
-// أقل عدد محاولات يسمح لنا بالحكم على المهارة نفسها
 const MIN_SKILL_SAMPLE = 8;
 
 // =========================================================
@@ -177,6 +211,7 @@ function checkRateLimit(
 
   return {
     allowed: true,
+
     remaining:
       RATE_LIMIT_MAX_REQUESTS -
       timestamps.length,
@@ -248,6 +283,7 @@ function getPendingQuiz(
     PENDING_QUIZ_TTL_MS
   ) {
     pendingQuizStore.delete(userId);
+
     return null;
   }
 
@@ -350,12 +386,10 @@ type TeachingDepth =
 interface SkillStat {
   name: string;
 
-  // الأداء الحديث المستخدم في تحديد مستوى الشرح
   correct: number;
   total: number;
   accuracy: number;
 
-  // الأداء المتاح في السجل المقروء
   historicalCorrect: number;
   historicalTotal: number;
   historicalAccuracy: number;
@@ -411,7 +445,10 @@ function findCurrentSkill(
         skill.name
       );
 
-    if (!name || !wanted) {
+    if (
+      !name ||
+      !wanted
+    ) {
       return false;
     }
 
@@ -450,10 +487,6 @@ function determineTeachingDepth(
       category
     );
 
-  // ===============================================
-  // الأفضل: مستوى الطالب في نفس المهارة
-  // ===============================================
-
   if (
     skill &&
     skill.total >= MIN_SKILL_SAMPLE
@@ -489,11 +522,6 @@ function determineTeachingDepth(
     };
   }
 
-  // ===============================================
-  // البيانات في المهارة غير كافية
-  // نستخدم المستوى العام بحذر
-  // ===============================================
-
   if (
     profile.solvedQuestions >= 15
   ) {
@@ -528,7 +556,6 @@ function determineTeachingDepth(
     };
   }
 
-  // عينة قليلة جداً
   return {
     depth: "guided",
     skill,
@@ -884,19 +911,13 @@ function classifySkill(
 }
 
 // =========================================================
-// 🧠 بناء ملف الطالب من النتائج الحقيقية
+// 🧠 بناء ملف الطالب
 // =========================================================
 
 async function buildStudentProfile(
   app: FastifyInstance,
   userId: string
 ): Promise<InternalStudentProfile | null> {
-  /*
-   * QuestionAttempt هو نفس المصدر الذي تحفظ فيه
-   * recordQuestionAttempt كل إجابة للطالب.
-   *
-   * نقرأ أحدث المحاولات أولاً.
-   */
   const attempts: Array<{
     sectionId: number;
     questionId: string;
@@ -909,7 +930,8 @@ async function buildStudentProfile(
       },
 
       orderBy: {
-        createdAt: "desc",
+        createdAt:
+          "desc",
       },
 
       take:
@@ -923,13 +945,11 @@ async function buildStudentProfile(
       },
     });
 
-  if (attempts.length === 0) {
+  if (
+    attempts.length === 0
+  ) {
     return null;
   }
-
-  // =======================================================
-  // جلب الأقسام المرتبطة بمحاولات الطالب
-  // =======================================================
 
   const sectionIds = [
     ...new Set(
@@ -957,19 +977,6 @@ async function buildStudentProfile(
       },
     });
 
-  /*
-   * صفحة النتائج لديك تستخدم:
-   *
-   * ans.question.category || meta.name || "عام"
-   *
-   * هنا نطبق المنطق نفسه تقريباً.
-   *
-   * الأولوية:
-   * question.category
-   * ثم section.category
-   * ثم section.type
-   * ثم section.name
-   */
   const questionCategory =
     new Map<string, string>();
 
@@ -1005,7 +1012,8 @@ async function buildStudentProfile(
     ) {
       if (
         !question ||
-        question.id === undefined
+        question.id ===
+          undefined
       ) {
         continue;
       }
@@ -1024,10 +1032,6 @@ async function buildStudentProfile(
       );
     }
   }
-
-  // =======================================================
-  // تجميع المحاولات حسب الموضوع
-  // =======================================================
 
   const attemptsBySkill =
     new Map<
@@ -1071,10 +1075,6 @@ async function buildStudentProfile(
     );
   }
 
-  // =======================================================
-  // حساب أداء كل مهارة
-  // =======================================================
-
   const skills:
     SkillStat[] = [];
 
@@ -1084,11 +1084,6 @@ async function buildStudentProfile(
       skillAttempts,
     ] of attemptsBySkill.entries()
   ) {
-    /*
-     * attempts جاءت أصلاً مرتبة من الأحدث إلى الأقدم.
-     *
-     * لذلك أول 20 محاولة هنا هي الأداء الحديث.
-     */
     const recentAttempts =
       skillAttempts.slice(
         0,
@@ -1114,7 +1109,6 @@ async function buildStudentProfile(
           )
         : 0;
 
-    // كامل السجل الذي قرأناه
     const historicalCorrect =
       skillAttempts.filter(
         (attempt) =>
@@ -1154,16 +1148,11 @@ async function buildStudentProfile(
     });
   }
 
-  // الأضعف حديثاً أولاً
   skills.sort(
     (a, b) =>
       a.accuracy -
       b.accuracy
   );
-
-  // =======================================================
-  // نقاط القوة والضعف بحسب الأداء الحديث
-  // =======================================================
 
   const strengths =
     skills
@@ -1192,10 +1181,6 @@ async function buildStudentProfile(
         (skill) =>
           skill.name
       );
-
-  // =======================================================
-  // المستوى العام
-  // =======================================================
 
   const totalCorrect =
     attempts.filter(
@@ -1293,8 +1278,10 @@ async function fetchSimilarQuestion(
 
           all.push({
             question: q,
+
             sectionId:
               sec.id,
+
             effectiveCategory,
           });
         }
@@ -1334,7 +1321,6 @@ async function fetchSimilarQuestion(
         );
     }
 
-    // ممنوع خلط الفئات
     if (
       pool.length === 0
     ) {
@@ -1423,7 +1409,8 @@ function detectIntent(
     )
   ) {
     return {
-      action: "similar",
+      action:
+        "similar",
     };
   }
 
@@ -1433,7 +1420,8 @@ function detectIntent(
     )
   ) {
     return {
-      action: "harder",
+      action:
+        "harder",
     };
   }
 
@@ -1443,7 +1431,8 @@ function detectIntent(
     )
   ) {
     return {
-      action: "easier",
+      action:
+        "easier",
     };
   }
 
@@ -1560,6 +1549,7 @@ export async function aiRoutes(
 
   app.options(
     "/ai/ask",
+
     async (
       request,
       reply
@@ -1600,6 +1590,7 @@ export async function aiRoutes(
 
   app.get(
     "/ai/history",
+
     {
       preHandler:
         app.authenticate,
@@ -1624,7 +1615,8 @@ export async function aiRoutes(
         return reply
           .status(401)
           .send({
-            success: false,
+            success:
+              false,
 
             message:
               "يجب تسجيل الدخول.",
@@ -1638,7 +1630,8 @@ export async function aiRoutes(
         );
 
       return reply.send({
-        success: true,
+        success:
+          true,
 
         messages:
           convo?.messages ??
@@ -1648,11 +1641,12 @@ export async function aiRoutes(
   );
 
   // =======================================================
-  // QUOTA
+  // QUOTA STATUS — جميع النماذج
   // =======================================================
 
   app.get(
     "/ai/quota-status",
+
     {
       preHandler:
         app.authenticate,
@@ -1668,71 +1662,32 @@ export async function aiRoutes(
         date:
           pacificDateKey(),
 
-        primary: {
-          model:
-            PRIMARY_MODEL,
+        models:
+          GEMINI_MODELS.map(
+            ({
+              model,
+              cap,
+            }) => ({
+              model,
 
-          used:
-            getUsage(
-              PRIMARY_MODEL
-            ),
-
-          cap:
-            PRIMARY_DAILY_CAP,
-
-          remaining:
-            Math.max(
-              0,
-              PRIMARY_DAILY_CAP -
+              used:
                 getUsage(
-                  PRIMARY_MODEL
-                )
-            ),
-        },
+                  model
+                ),
 
-        secondary: {
-          model:
-            SECONDARY_MODEL,
+              cap,
 
-          used:
-            getUsage(
-              SECONDARY_MODEL
-            ),
+              remaining:
+                Math.max(
+                  0,
 
-          cap:
-            SECONDARY_DAILY_CAP,
-
-          remaining:
-            Math.max(
-              0,
-              SECONDARY_DAILY_CAP -
-                getUsage(
-                  SECONDARY_MODEL
-                )
-            ),
-        },
-
-        fallback: {
-          model:
-            FALLBACK_MODEL,
-
-          used:
-            getUsage(
-              FALLBACK_MODEL
-            ),
-
-          cap:
-            FALLBACK_DAILY_CAP,
-
-          remaining:
-            Math.max(
-              0,
-              FALLBACK_DAILY_CAP -
-                getUsage(
-                  FALLBACK_MODEL
-                )
-            ),
-        },
+                  cap -
+                    getUsage(
+                      model
+                    )
+                ),
+            })
+          ),
       });
     }
   );
@@ -1743,6 +1698,7 @@ export async function aiRoutes(
 
   app.post(
     "/ai/feedback",
+
     {
       preHandler:
         app.authenticate,
@@ -1767,7 +1723,8 @@ export async function aiRoutes(
         return reply
           .status(401)
           .send({
-            success: false,
+            success:
+              false,
 
             message:
               "يجب تسجيل الدخول.",
@@ -1787,13 +1744,16 @@ export async function aiRoutes(
         };
 
       if (
-        rating !== "up" &&
-        rating !== "down"
+        rating !==
+          "up" &&
+        rating !==
+          "down"
       ) {
         return reply
           .status(400)
           .send({
-            success: false,
+            success:
+              false,
 
             message:
               "قيمة تقييم غير صالحة.",
@@ -1820,7 +1780,8 @@ export async function aiRoutes(
       }
 
       return reply.send({
-        success: true,
+        success:
+          true,
       });
     }
   );
@@ -1831,6 +1792,7 @@ export async function aiRoutes(
 
   app.post(
     "/ai/ask",
+
     {
       preHandler:
         app.authenticate,
@@ -1848,7 +1810,8 @@ export async function aiRoutes(
         return reply
           .status(500)
           .send({
-            success: false,
+            success:
+              false,
 
             message:
               "لم يتم إعداد مفتاح الذكاء الاصطناعي.",
@@ -1870,7 +1833,8 @@ export async function aiRoutes(
         return reply
           .status(401)
           .send({
-            success: false,
+            success:
+              false,
 
             message:
               "يجب تسجيل الدخول.",
@@ -1886,11 +1850,14 @@ export async function aiRoutes(
           userId
         );
 
-      if (!rate.allowed) {
+      if (
+        !rate.allowed
+      ) {
         return reply
           .status(429)
           .send({
-            success: false,
+            success:
+              false,
 
             message:
               "لقد استخدمت الحد الأقصى من الأسئلة لهذه الساعة. حاول مجدداً بعد قليل.",
@@ -1906,37 +1873,67 @@ export async function aiRoutes(
           question?: string;
 
           currentQuestion?: {
-            question: string;
-            options: string[];
-            correctIndex: number;
-            category?: string;
+            question:
+              string;
 
-            passage?: string;
-            context?: string;
-            passageText?: string;
-            readingPassage?: string;
-            paragraph?: string;
+            options:
+              string[];
+
+            correctIndex:
+              number;
+
+            category?:
+              string;
+
+            passage?:
+              string;
+
+            context?:
+              string;
+
+            passageText?:
+              string;
+
+            readingPassage?:
+              string;
+
+            paragraph?:
+              string;
           };
 
           history?: Array<{
-            role: string;
-            text: string;
+            role:
+              string;
+
+            text:
+              string;
           }>;
 
           studentProfile?: {
-            level?: string;
-            solvedQuestions?: number;
-            accuracy?: number;
-            strengths?: string[];
-            weaknesses?: string[];
+            level?:
+              string;
+
+            solvedQuestions?:
+              number;
+
+            accuracy?:
+              number;
+
+            strengths?:
+              string[];
+
+            weaknesses?:
+              string[];
           };
         };
 
       const contents: Array<{
-        role: string;
+        role:
+          string;
 
         parts: Array<{
-          text: string;
+          text:
+            string;
         }>;
       }> = [];
 
@@ -2013,7 +2010,9 @@ export async function aiRoutes(
         currentQuestionText =
           cq.question;
 
-        if (cq.category) {
+        if (
+          cq.category
+        ) {
           lastCategoryStore.set(
             userId,
             String(
@@ -2062,7 +2061,9 @@ export async function aiRoutes(
             ? cq.passage.trim()
             : "";
 
-        if (!passage) {
+        if (
+          !passage
+        ) {
           passage =
             String(
               cq.context ||
@@ -2073,7 +2074,9 @@ export async function aiRoutes(
             ).trim();
         }
 
-        if (!passage) {
+        if (
+          !passage
+        ) {
           try {
             const secs =
               await app.prisma.section.findMany({
@@ -2095,7 +2098,9 @@ export async function aiRoutes(
                 Array.isArray(
                   sec.questions
                 )
-                  ? (sec.questions as any[])
+                  ? (
+                      sec.questions as any[]
+                    )
                   : [];
 
               for (
@@ -2138,7 +2143,8 @@ export async function aiRoutes(
         const isReadingComprehension =
           cq.category ===
             "استيعاب المقروء" ||
-          passage.length > 0;
+          passage.length >
+            0;
 
         const explainMsg =
           [
@@ -2169,7 +2175,8 @@ export async function aiRoutes(
                 i
               ) =>
                 `${
-                  i + 1
+                  i +
+                  1
                 }) ${o}`
             ),
 
@@ -2209,7 +2216,8 @@ export async function aiRoutes(
             );
 
         contents.push({
-          role: "user",
+          role:
+            "user",
 
           parts: [
             {
@@ -2229,7 +2237,9 @@ export async function aiRoutes(
             ""
           ).trim();
 
-        if (!question) {
+        if (
+          !question
+        ) {
           return reply
             .status(400)
             .send({
@@ -2265,7 +2275,9 @@ export async function aiRoutes(
             userId
           );
 
-        if (pending) {
+        if (
+          pending
+        ) {
           const matchedIndex =
             matchStudentAnswer(
               question,
@@ -2317,7 +2329,8 @@ export async function aiRoutes(
                     i
                   ) =>
                     `${
-                      i + 1
+                      i +
+                      1
                     }) ${o}`
                 ),
 
@@ -2351,7 +2364,8 @@ export async function aiRoutes(
                 );
 
             contents.push({
-              role: "user",
+              role:
+                "user",
 
               parts: [
                 {
@@ -2376,6 +2390,7 @@ export async function aiRoutes(
             ) {
               lastCategoryStore.set(
                 userId,
+
                 String(
                   pending.category
                 )
@@ -2419,11 +2434,15 @@ export async function aiRoutes(
             const bank =
               await fetchSimilarQuestion(
                 app,
+
                 effectiveCategory,
+
                 currentQuestionText
               );
 
-            if (bank) {
+            if (
+              bank
+            ) {
               const bankPassage =
                 typeof bank.passage ===
                 "string"
@@ -2443,7 +2462,9 @@ export async function aiRoutes(
                 bank.correctIndex <
                   bank.options.length;
 
-              if (!validBank) {
+              if (
+                !validBank
+              ) {
                 contents.push({
                   role:
                     "user",
@@ -2474,7 +2495,8 @@ export async function aiRoutes(
                         i
                       ) =>
                         `${
-                          i + 1
+                          i +
+                          1
                         }) ${o}`
                     )
                     .join(
@@ -2503,6 +2525,7 @@ export async function aiRoutes(
 
                 pendingQuizStore.set(
                   userId,
+
                   {
                     question:
                       bank.question,
@@ -2582,12 +2605,13 @@ export async function aiRoutes(
       }
 
       // =====================================================
-      // 🧠 قراءة نتائج الطالب الحقيقية
+      // 🧠 قراءة نتائج الطالب
       // =====================================================
 
       let internalProfile:
         | InternalStudentProfile
-        | null = null;
+        | null =
+        null;
 
       try {
         internalProfile =
@@ -2614,7 +2638,8 @@ export async function aiRoutes(
               userId
             ) ||
             ""
-        ) || undefined;
+        ) ||
+        undefined;
 
       // =====================================================
       // 🎯 تحديد عمق الشرح
@@ -2642,7 +2667,7 @@ export async function aiRoutes(
         teachingInstruction;
 
       // =====================================================
-      // 📊 بيانات الطالب للمعلم
+      // 📊 بيانات الطالب
       // =====================================================
 
       if (
@@ -2749,7 +2774,7 @@ ${internalProfile.weaknesses.join(
       }
 
       // =====================================================
-      // 🏫 معرفة المنصة
+      // 🏫 معلومات المنصة
       // =====================================================
 
       try {
@@ -2762,12 +2787,14 @@ ${internalProfile.weaknesses.join(
           PLATFORM_KNOWLEDGE
             .replace(
               "{SECTIONS_COUNT}",
+
               String(
                 pStats.sections
               )
             )
             .replace(
               "{QUESTIONS_COUNT}",
+
               String(
                 pStats.questions
               )
@@ -2775,7 +2802,7 @@ ${internalProfile.weaknesses.join(
       } catch {}
 
       // =====================================================
-      // ✅ تعليمات نهائية
+      // تعليمات نهائية
       // =====================================================
 
       dynamicSystemPrompt += `
@@ -2801,7 +2828,8 @@ ${internalProfile.weaknesses.join(
         string,
         any
       > = {
-        temperature: 0.4,
+        temperature:
+          0.4,
 
         maxOutputTokens:
           8192,
@@ -2833,83 +2861,69 @@ ${internalProfile.weaknesses.join(
       };
 
       // =====================================================
-      // ✅ النماذج
+      // 🤖 بناء قائمة النماذج المتاحة
       // =====================================================
 
       const candidates: Array<{
-        model: string;
-        url: string;
+        model:
+          string;
+
+        url:
+          string;
+
+        cap:
+          number;
       }> = [];
 
-      // 1) Gemini 3.7 Flash
-      if (
-        !isModelAtCap(
-          PRIMARY_MODEL,
-          PRIMARY_DAILY_CAP
-        )
+      for (
+        const {
+          model,
+          cap,
+        } of GEMINI_MODELS
       ) {
         if (
-          isModelNearCap(
-            PRIMARY_MODEL,
-            PRIMARY_DAILY_CAP
+          isModelAtCap(
+            model,
+            cap
           )
         ) {
           console.warn(
-            `[Gemini quota] ${PRIMARY_MODEL}: ${getUsage(
-              PRIMARY_MODEL
-            )}/${PRIMARY_DAILY_CAP}`
+            `[Gemini quota] ${model} وصل للحد اليومي: ${getUsage(
+              model
+            )}/${cap}`
+          );
+
+          continue;
+        }
+
+        if (
+          isModelNearCap(
+            model,
+            cap
+          )
+        ) {
+          console.warn(
+            `[Gemini quota] ${model} اقترب من الحد: ${getUsage(
+              model
+            )}/${cap}`
           );
         }
 
         candidates.push({
-          model:
-            PRIMARY_MODEL,
+          model,
+
+          cap,
 
           url:
             GEMINI_STREAM_URL_FOR(
-              PRIMARY_MODEL
-            ),
-        });
-      }
-
-      // 2) Gemini 3.5 Flash Lite
-      if (
-        !isModelAtCap(
-          SECONDARY_MODEL,
-          SECONDARY_DAILY_CAP
-        )
-      ) {
-        candidates.push({
-          model:
-            SECONDARY_MODEL,
-
-          url:
-            GEMINI_STREAM_URL_FOR(
-              SECONDARY_MODEL
-            ),
-        });
-      }
-
-      // 3) Gemini 3.1 Flash Lite
-      if (
-        !isModelAtCap(
-          FALLBACK_MODEL,
-          FALLBACK_DAILY_CAP
-        )
-      ) {
-        candidates.push({
-          model:
-            FALLBACK_MODEL,
-
-          url:
-            GEMINI_STREAM_URL_FOR(
-              FALLBACK_MODEL
+              model
             ),
         });
       }
 
       if (
-        candidates.length === 0
+        candidates.length ===
+        0
       ) {
         return reply
           .status(503)
@@ -2980,7 +2994,8 @@ ${internalProfile.weaknesses.join(
       try {
         let upstream:
           | Response
-          | null = null;
+          | null =
+          null;
 
         let chosen =
           candidates[0];
@@ -2993,12 +3008,15 @@ ${internalProfile.weaknesses.join(
         ) {
           try {
             console.log(
-              `[Gemini] تجربة ${cand.model}`
+              `[Gemini] تجربة ${cand.model} — الاستخدام ${getUsage(
+                cand.model
+              )}/${cand.cap}`
             );
 
             const res =
               await fetch(
                 `${cand.url}&key=${apiKey}`,
+
                 {
                   method:
                     "POST",
@@ -3018,7 +3036,9 @@ ${internalProfile.weaknesses.join(
                 }
               );
 
-            if (res.ok) {
+            if (
+              res.ok
+            ) {
               upstream =
                 res;
 
@@ -3026,7 +3046,7 @@ ${internalProfile.weaknesses.join(
                 cand;
 
               console.log(
-                `[Gemini] يعمل عبر ${cand.model}`
+                `[Gemini] ✅ يعمل عبر ${cand.model}`
               );
 
               break;
@@ -3048,10 +3068,11 @@ ${internalProfile.weaknesses.join(
               `${res.status} ${errMsg}`;
 
             console.error(
-              `[Gemini] فشل ${cand.model}:`,
+              `[Gemini] ❌ فشل ${cand.model}:`,
               lastErrMsg
             );
 
+            // ينتقل للنموذج التالي تلقائياً
             continue;
           } catch (
             fetchErr: any
@@ -3061,7 +3082,7 @@ ${internalProfile.weaknesses.join(
               "fetch error";
 
             console.error(
-              `[Gemini] خطأ ${cand.model}:`,
+              `[Gemini] ❌ خطأ ${cand.model}:`,
               lastErrMsg
             );
 
@@ -3075,7 +3096,9 @@ ${internalProfile.weaknesses.join(
           }
         }
 
-        if (!upstream) {
+        if (
+          !upstream
+        ) {
           clearTimeout(
             timeout
           );
@@ -3099,18 +3122,19 @@ ${internalProfile.weaknesses.join(
             });
         }
 
-        // يحتسب فقط النموذج الذي نجح
-        incrementUsage(
-          chosen.model
-        );
+        // ===================================================
+        // 📊 احتساب النموذج الذي نجح فقط
+        // ===================================================
+
+        const newUsage =
+          incrementUsage(
+            chosen.model
+          );
 
         console.log(
-          `[Gemini usage] ${chosen.model}: ${getUsage(
-            chosen.model
-          )}`
+          `[Gemini usage] ${chosen.model}: ${newUsage}/${chosen.cap}`
         );
 
-        // معلومات مفيدة لك في Logs
         console.log(
           `[Adaptive Teaching] user=${userId} category=${effectiveCategory || "unknown"} depth=${teaching.depth} source=${teaching.source} skillAccuracy=${teaching.skill?.accuracy ?? "N/A"} skillAttempts=${teaching.skill?.total ?? 0}`
         );
@@ -3125,6 +3149,7 @@ ${internalProfile.weaknesses.join(
 
         reply.raw.writeHead(
           200,
+
           {
             "Content-Type":
               "text/event-stream; charset=utf-8",
@@ -3149,7 +3174,9 @@ ${internalProfile.weaknesses.join(
         const reader =
           upstream.body?.getReader();
 
-        if (!reader) {
+        if (
+          !reader
+        ) {
           clearTimeout(
             timeout
           );
@@ -3162,19 +3189,24 @@ ${internalProfile.weaknesses.join(
             "utf-8"
           );
 
-        let buffer = "";
+        let buffer =
+          "";
 
         let emitted =
           false;
 
-        while (true) {
+        while (
+          true
+        ) {
           const {
             done,
             value,
           } =
             await reader.read();
 
-          if (done) {
+          if (
+            done
+          ) {
             break;
           }
 
@@ -3183,6 +3215,7 @@ ${internalProfile.weaknesses.join(
           buffer +=
             decoder.decode(
               value,
+
               {
                 stream:
                   true,
@@ -3238,7 +3271,9 @@ ${internalProfile.weaknesses.join(
                   ?.parts?.[0]
                   ?.text;
 
-              if (piece) {
+              if (
+                piece
+              ) {
                 emitted =
                   true;
 
@@ -3292,7 +3327,9 @@ ${internalProfile.weaknesses.join(
                   ?.parts?.[0]
                   ?.text;
 
-              if (piece) {
+              if (
+                piece
+              ) {
                 emitted =
                   true;
 
@@ -3315,7 +3352,9 @@ ${internalProfile.weaknesses.join(
           timeout
         );
 
-        if (!emitted) {
+        if (
+          !emitted
+        ) {
           reply.raw.write(
             `data: ${JSON.stringify(
               {
@@ -3328,7 +3367,8 @@ ${internalProfile.weaknesses.join(
           reply.raw.write(
             `data: ${JSON.stringify(
               {
-                done: true,
+                done:
+                  true,
 
                 model:
                   chosen.model,
@@ -3403,7 +3443,8 @@ ${internalProfile.weaknesses.join(
             ...priorHistory,
 
             {
-              role: "user",
+              role:
+                "user",
 
               text:
                 outgoingUserText,
