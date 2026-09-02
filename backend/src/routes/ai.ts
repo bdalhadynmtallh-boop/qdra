@@ -26,8 +26,8 @@ import { FastifyInstance } from "fastify";
   17) لا يوجد أي تغيير على الخط أو CSS
 ========================================================= */
 
-const PRIMARY_MODEL = "gemini-3.5-flash-lite";
-const FALLBACK_MODEL = "gemini-3.1-flash-lite";
+const PRIMARY_MODEL = "gemini-3.1-flash-lite";
+const FALLBACK_MODEL = "gemini-3.5-flash-lite";
 
 const PRIMARY_DAILY_CAP = Number(
   process.env.GEMINI_PRIMARY_DAILY_CAP || 500
