@@ -1,19 +1,24 @@
 import { FastifyInstance } from "fastify";
 
 /* =========================================================
-   🎓 المعلم الذكي في قُدرة — معلم شخصي حقيقي
+   🎓 المعلم الذكي في قُدرة — معلم شخصي متكيف
 
    ترتيب النماذج:
    1) Gemini 3.7 Flash      — حد داخلي 20 طلباً يومياً
    2) Gemini 3.5 Flash Lite — حد داخلي 500
    3) Gemini 3.1 Flash Lite — حد داخلي 500
 
-   المفتاح:
-   GEMINI_API_KEY
-
-   ملاحظة:
-   العدادات الحالية داخل ذاكرة السيرفر.
-   إعادة تشغيل السيرفر تعيد العدادات إلى صفر.
+   المميزات:
+   - Adaptive Teaching حسب مستوى الطالب
+   - قراءة أداء الطالب الحقيقي من QuestionAttempt
+   - تحليل الأداء حسب category مثل صفحة نتائج الاختبار
+   - الاعتماد على الأداء الحديث في كل مهارة
+   - تخصيص حسب المهارة الحالية
+   - شرح تأسيسي للطالب المتعثر
+   - شرح مختصر للطالب المتمكن
+   - إعادة شرح بطريقة أبسط عند عدم الفهم
+   - منع اختراع الأسئلة والخيارات
+   - Failover تلقائي بين النماذج
 ========================================================= */
 
 // =========================================================
@@ -46,7 +51,20 @@ const GEMINI_STREAM_URL_FOR = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
 
 // =========================================================
-// 📊 عدّاد الاستهلاك اليومي
+// 📊 إعدادات تحليل مستوى الطالب
+// =========================================================
+
+// آخر كم محاولة إجمالاً نقرأها من قاعدة البيانات
+const STUDENT_PROFILE_ATTEMPT_LIMIT = 300;
+
+// آخر كم محاولة في كل مهارة نعتمد عليها للمستوى الحالي
+const RECENT_SKILL_ATTEMPT_LIMIT = 20;
+
+// أقل عدد محاولات يسمح لنا بالحكم على المهارة نفسها
+const MIN_SKILL_SAMPLE = 8;
+
+// =========================================================
+// 📊 عداد الاستخدام
 // =========================================================
 
 function pacificDateKey(): string {
@@ -59,9 +77,7 @@ const usageCounters = new Map<string, number>();
 
 function incrementUsage(model: string): number {
   const key = `${pacificDateKey()}:${model}`;
-
-  const next =
-    (usageCounters.get(key) || 0) + 1;
+  const next = (usageCounters.get(key) || 0) + 1;
 
   usageCounters.set(key, next);
 
@@ -93,7 +109,6 @@ function isModelAtCap(
   return getUsage(model) >= cap;
 }
 
-// تنظيف عدادات الأيام القديمة
 setInterval(() => {
   const todayKey = pacificDateKey();
 
@@ -117,13 +132,10 @@ const DEEP_REASONING_CATEGORIES = new Set([
 // 🚦 Rate Limiting
 // =========================================================
 
-const RATE_LIMIT_WINDOW_MS =
-  60 * 60 * 1000;
-
+const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 
-const rateLimitStore =
-  new Map<string, number[]>();
+const rateLimitStore = new Map<string, number[]>();
 
 function checkRateLimit(
   userId: string
@@ -165,7 +177,6 @@ function checkRateLimit(
 
   return {
     allowed: true,
-
     remaining:
       RATE_LIMIT_MAX_REQUESTS -
       timestamps.length,
@@ -189,9 +200,7 @@ setInterval(() => {
       );
 
     if (fresh.length === 0) {
-      rateLimitStore.delete(
-        userId
-      );
+      rateLimitStore.delete(userId);
     } else {
       rateLimitStore.set(
         userId,
@@ -202,7 +211,7 @@ setInterval(() => {
 }, 15 * 60 * 1000).unref?.();
 
 // =========================================================
-// 🧩 سؤال "اختبرني" المعلق
+// 🧩 الاختبار المعلق
 // =========================================================
 
 interface PendingQuiz {
@@ -238,10 +247,7 @@ function getPendingQuiz(
       pending.createdAt >
     PENDING_QUIZ_TTL_MS
   ) {
-    pendingQuizStore.delete(
-      userId
-    );
-
+    pendingQuizStore.delete(userId);
     return null;
   }
 
@@ -263,7 +269,6 @@ function matchStudentAnswer(
   const trimmed =
     message.trim();
 
-  // رقم مباشر
   const numMatch =
     trimmed.match(/\d+/);
 
@@ -276,22 +281,18 @@ function matchStudentAnswer(
 
     if (
       idx >= 0 &&
-      idx <
-        pending.options.length &&
+      idx < pending.options.length &&
       trimmed.length <= 6
     ) {
       return idx;
     }
   }
 
-  // حرف عربي
   if (trimmed.length <= 8) {
     for (
       let i = 0;
-      i <
-        ARABIC_LETTERS.length &&
-      i <
-        pending.options.length;
+      i < ARABIC_LETTERS.length &&
+      i < pending.options.length;
       i++
     ) {
       if (
@@ -304,7 +305,6 @@ function matchStudentAnswer(
     }
   }
 
-  // تطابق نصي
   const normalized =
     trimmed.replace(
       /[\s\u064B-\u065F]/g,
@@ -313,14 +313,11 @@ function matchStudentAnswer(
 
   for (
     let i = 0;
-    i <
-    pending.options.length;
+    i < pending.options.length;
     i++
   ) {
     const opt =
-      pending.options[
-        i
-      ].replace(
+      pending.options[i].replace(
         /[\s\u064B-\u065F]/g,
         ""
       );
@@ -341,31 +338,342 @@ function matchStudentAnswer(
 }
 
 // =========================================================
+// 🧠 Adaptive Teaching
+// =========================================================
+
+type TeachingDepth =
+  | "foundation"
+  | "guided"
+  | "concise"
+  | "advanced";
+
+interface SkillStat {
+  name: string;
+
+  // الأداء الحديث المستخدم في تحديد مستوى الشرح
+  correct: number;
+  total: number;
+  accuracy: number;
+
+  // الأداء المتاح في السجل المقروء
+  historicalCorrect: number;
+  historicalTotal: number;
+  historicalAccuracy: number;
+}
+
+interface InternalStudentProfile {
+  skills: SkillStat[];
+  strengths: string[];
+  weaknesses: string[];
+
+  solvedQuestions: number;
+  accuracy: number;
+}
+
+// =========================================================
+// 🧹 توحيد أسماء الفئات
+// =========================================================
+
+function normalizeCategory(
+  value?: string
+): string {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function findCurrentSkill(
+  skills: SkillStat[],
+  category?: string
+): SkillStat | undefined {
+  if (!category) {
+    return undefined;
+  }
+
+  const wanted =
+    normalizeCategory(category);
+
+  const exact =
+    skills.find(
+      (skill) =>
+        normalizeCategory(
+          skill.name
+        ) === wanted
+    );
+
+  if (exact) {
+    return exact;
+  }
+
+  return skills.find((skill) => {
+    const name =
+      normalizeCategory(
+        skill.name
+      );
+
+    if (!name || !wanted) {
+      return false;
+    }
+
+    return (
+      name.includes(wanted) ||
+      wanted.includes(name)
+    );
+  });
+}
+
+// =========================================================
+// 🎯 تحديد مستوى الشرح
+// =========================================================
+
+function determineTeachingDepth(
+  profile: InternalStudentProfile | null,
+  category?: string
+): {
+  depth: TeachingDepth;
+  skill?: SkillStat;
+  source:
+    | "skill"
+    | "general"
+    | "unknown";
+} {
+  if (!profile) {
+    return {
+      depth: "guided",
+      source: "unknown",
+    };
+  }
+
+  const skill =
+    findCurrentSkill(
+      profile.skills,
+      category
+    );
+
+  // ===============================================
+  // الأفضل: مستوى الطالب في نفس المهارة
+  // ===============================================
+
+  if (
+    skill &&
+    skill.total >= MIN_SKILL_SAMPLE
+  ) {
+    if (skill.accuracy < 60) {
+      return {
+        depth: "foundation",
+        skill,
+        source: "skill",
+      };
+    }
+
+    if (skill.accuracy < 80) {
+      return {
+        depth: "guided",
+        skill,
+        source: "skill",
+      };
+    }
+
+    if (skill.accuracy < 90) {
+      return {
+        depth: "concise",
+        skill,
+        source: "skill",
+      };
+    }
+
+    return {
+      depth: "advanced",
+      skill,
+      source: "skill",
+    };
+  }
+
+  // ===============================================
+  // البيانات في المهارة غير كافية
+  // نستخدم المستوى العام بحذر
+  // ===============================================
+
+  if (
+    profile.solvedQuestions >= 15
+  ) {
+    if (profile.accuracy < 60) {
+      return {
+        depth: "foundation",
+        skill,
+        source: "general",
+      };
+    }
+
+    if (profile.accuracy < 80) {
+      return {
+        depth: "guided",
+        skill,
+        source: "general",
+      };
+    }
+
+    if (profile.accuracy < 90) {
+      return {
+        depth: "concise",
+        skill,
+        source: "general",
+      };
+    }
+
+    return {
+      depth: "advanced",
+      skill,
+      source: "general",
+    };
+  }
+
+  // عينة قليلة جداً
+  return {
+    depth: "guided",
+    skill,
+    source: "unknown",
+  };
+}
+
+function buildTeachingInstruction(
+  depth: TeachingDepth
+): string {
+  switch (depth) {
+    case "foundation":
+      return `
+أسلوب التدريس المطلوب لهذا الطالب في هذه المهارة: تأسيسي.
+
+- ابدأ من أساس الفكرة.
+- لا تفترض أن الطالب يعرف المصطلحات أو القاعدة.
+- اشرح معنى الفكرة أولاً بلغة سهلة.
+- قسم الحل إلى خطوات صغيرة وواضحة.
+- لا تقفز مباشرة إلى النتيجة.
+- اربط كل خطوة بالسؤال الحالي.
+- وضح سبب صحة الإجابة بطريقة بسيطة.
+- وضح الفخ الذي قد يجعل الطالب يختار المشتت.
+- اختم بقاعدة سهلة وقصيرة.
+- لا تكثر المعلومات في خطوة واحدة.
+- لا تخبر الطالب أنه ضعيف أو أن مستواه منخفض.
+`;
+
+    case "guided":
+      return `
+أسلوب التدريس المطلوب لهذا الطالب في هذه المهارة: متدرج.
+
+- اشرح الفكرة باختصار قبل الحل.
+- حل السؤال خطوة بخطوة.
+- وضح نقطة التفكير الأساسية.
+- اشرح سبب الإجابة الصحيحة.
+- وضح أهم مشتت إذا كان مفيداً.
+- اختم بقاعدة عملية لسؤال مشابه.
+- لا تشرح أساسيات بعيدة عن السؤال دون حاجة.
+`;
+
+    case "concise":
+      return `
+أسلوب التدريس المطلوب لهذا الطالب في هذه المهارة: مختصر.
+
+- الطالب لديه فهم جيد نسبياً لهذه المهارة.
+- ابدأ مباشرة بفكرة السؤال.
+- اختصر الخطوات البديهية.
+- ركز على سبب اختيار الإجابة.
+- ركز على المشتت أو الفخ المهم.
+- اختم بقاعدة قصيرة.
+- لا تطل في شرح معلومات يعرفها الطالب غالباً.
+`;
+
+    case "advanced":
+      return `
+أسلوب التدريس المطلوب لهذا الطالب في هذه المهارة: متقدم.
+
+- افترض إلماماً جيداً بأساس المهارة.
+- أعط الحل بصورة مباشرة ومركزة.
+- لا تعد شرح المبادئ الأساسية إلا إذا طلب الطالب.
+- ركز على الدقيقة اللغوية أو المنطقية التي تحسم السؤال.
+- وضح المشتت الأقوى فقط إذا كانت له قيمة تعليمية.
+- اجعل القاعدة النهائية دقيقة ومختصرة.
+- لا تخبر الطالب بأن النظام صنفه متقدماً.
+`;
+  }
+}
+
+// =========================================================
+// 🔄 إعادة الشرح
+// =========================================================
+
+function isConfusionMessage(
+  message?: string
+): boolean {
+  if (!message) {
+    return false;
+  }
+
+  const q =
+    message.trim();
+
+  return /ما\s*فهمت|مو\s*فاهم|مش\s*فاهم|لم\s*أفهم|وضح|وضّح|اشرح\s*أكثر|شرح\s*أكثر|أبسط|بسطها|بسّطها|من\s*الصفر|كيف\s*يعني|ليش\s*كذا|وش\s*يعني/.test(
+    q
+  );
+}
+
+const REEXPLAIN_INSTRUCTION = `
+الطالب يشير إلى أنه لم يفهم الشرح السابق أو يريد تبسيطاً إضافياً.
+
+تعليمات إعادة الشرح:
+- لا تكرر الشرح السابق بنفس الكلمات.
+- غير طريقة الشرح.
+- ابدأ من نقطة أبسط.
+- استخدم كلمات أسهل وجملاً أقصر.
+- قسم الفكرة إلى خطوات صغيرة.
+- إذا كان هناك مصطلح غير واضح، فاشرح معناه.
+- لا تنشئ سؤالاً تدريبياً جديداً.
+- لا تخترع خيارات.
+- ركز على نقطة الالتباس المحتملة.
+`;
+
+// =========================================================
 // 🧠 شخصية المعلم
 // =========================================================
 
 const BASE_SYSTEM_PROMPT = `
-أنت "المعلم الذكي في قُدرة"، مدرّس خصوصي خبير في القسم اللفظي من اختبار القدرات العامة (قياس) في السعودية.
+أنت "المعلم الذكي في قُدرة"، مدرس خصوصي خبير في القسم اللفظي من اختبار القدرات العامة (قياس) في السعودية.
+
+هدفك ليس إعطاء الإجابة فقط، بل تعليم كل طالب بالطريقة المناسبة لمستواه الحقيقي.
 
 تخصصك:
 التناظر اللفظي، إكمال الجمل، الخطأ السياقي، المفردة المختلفة، استيعاب المقروء، المفردات، العلاقات بين الكلمات، واستراتيجيات القدرات اللفظية.
 
 شخصيتك:
 - واضح وذكي وصبور وطبيعي.
-- مختصر عندما يكون السؤال سهلاً، ومفصل عندما يكون صعباً.
+- تكيف مع مستوى الطالب.
+- لا تستخدم نفس مقدار الشرح لجميع الطلاب.
+- لا تكثر الشرح للطالب المتمكن.
+- لا تختصر بصورة مخلة مع الطالب الذي يحتاج تأسيساً.
 - مشجع دون مبالغة.
 - لا تتحدث بأسلوب روبوتي أو رسمي مفرط.
-- استخدم أسلوب مدرس خبير.
+
+التخصيص:
+- النظام يحلل نتائج الطالب الحقيقية المسجلة في المنصة حسب الموضوع.
+- ستصلك تعليمات تحدد مستوى الشرح المناسب للطالب.
+- التزم بمستوى الشرح الذي يحدده النظام.
+- مستوى الشرح يعتمد على أداء الطالب في المهارة الحالية قدر الإمكان.
+- الأداء الحديث في المهارة أهم من الأداء القديم.
+- لا تذكر للطالب تصنيفه الداخلي.
+- لا تقل للطالب إنه ضعيف أو أن النظام صنفه بمستوى معين.
+- لا تعرض نسبه أو عدد محاولاته إلا إذا طلب إحصائياته صراحة.
+- استخدم البيانات داخلياً فقط لتخصيص طريقة التعليم.
+- إذا كان الطالب متمكناً، اختصر.
+- إذا كان يحتاج تأسيساً، ابدأ من الأساس.
+- إذا قال إنه لم يفهم، غير طريقة الشرح وبسطها.
 
 فهم السياق:
 - أنت تتابع محادثة مستمرة.
 - قد يقول الطالب "ما فهمت" أو "ليش؟" أو "وضح أكثر" أو "أعطني مثالاً".
 - اربط هذه الرسائل بالشرح السابق.
-- إذا قال الطالب "ما فهمت"، فأعد الشرح بطريقة أبسط.
 - لا تطلب إعادة السؤال إذا كان المقصود واضحاً.
 
 مصدر الأسئلة والخيارات — إلزامي جداً:
-
 - لا تخترع أي سؤال من نفسك.
 - لا تنشئ سؤالاً جديداً من خيالك.
 - لا تنشئ خيارات جديدة.
@@ -375,20 +683,18 @@ const BASE_SYSTEM_PROMPT = `
 - لا تحذف خياراً.
 - لا تستبدل خيارات البنك بخيارات من عندك.
 - لا تخترع إجابة صحيحة.
-- عندما يطلب الطالب سؤالاً تدريبياً أو اختباراً أو مثالاً، استخدم فقط السؤال الذي يرسله النظام من بنك أسئلة قُدرة.
+- عندما يطلب الطالب سؤالاً تدريبياً أو اختباراً أو سؤالاً مشابهاً، استخدم فقط السؤال الذي يرسله النظام من بنك أسئلة قُدرة.
 - إذا لم يتوفر سؤال من البنك، أخبر الطالب أن السؤال التدريبي غير متوفر حالياً.
 - لا تعوض ذلك بسؤال من عندك.
 
 الإجابة الصحيحة — إلزامي:
-
 - إذا أرسل النظام الإجابة الصحيحة المؤكدة، فهي نهائية.
-- لا تعيد اختيار الإجابة بنفسك.
+- لا تعد اختيار الإجابة بنفسك.
 - لا تغير الإجابة الصحيحة.
 - اشرح لماذا الإجابة المحددة من النظام صحيحة.
 - تعامل فقط مع الخيارات المرسلة من النظام.
 
 استيعاب المقروء:
-
 - إذا أرسلت قطعة استيعاب مقروء، فهي جزء أساسي من السؤال.
 - اقرأ القطعة كاملة.
 - اعتمد عليها بوصفها المصدر الأساسي للإجابة.
@@ -398,40 +704,30 @@ const BASE_SYSTEM_PROMPT = `
 - إذا كانت الإجابة الصحيحة مؤكدة من النظام، فلا تغيرها.
 
 شرح السؤال الحالي:
-
-استخدم عند الحاجة هذا التنظيم:
+استخدم العناوين عند فائدتها، وليس بشكل آلي في كل رد.
 
 الفكرة
 
-اشرح الفكرة الأساسية.
-
 الحل
-
-اذكر الإجابة الصحيحة المؤكدة.
 
 لماذا؟
 
-اشرح سبب صحة الإجابة.
-
 المشتت
-
-اشرح أقوى خيار خاطئ عند الحاجة.
 
 القاعدة
 
-اذكر القاعدة أو الطريقة المفيدة لسؤال مشابه.
+إذا كان مستوى الطالب متقدماً، اختصر الشرح.
+إذا كان مستوى الطالب تأسيسياً، قسم الشرح إلى خطوات أبسط.
 
 التدريب التفاعلي:
-
-- إذا قال الطالب "اختبرني" أو "أعطني سؤالاً" أو "سؤال مشابه" أو "أعطني مثالاً"، استخدم فقط سؤال البنك الذي أرسله النظام.
-- لا تكشف الإجابة الصحيحة قبل إجابة الطالب.
+- إذا طلب الطالب اختباراً أو سؤالاً تدريبياً، استخدم سؤال البنك فقط.
+- لا تكشف الإجابة قبل إجابة الطالب.
 - لا تغير الخيارات.
-- إذا أرسل النظام نتيجة برمجية لإجابة الطالب، فالنتيجة نهائية.
-- لا تعيد تقييم صحة الإجابة بنفسك.
-- اشرح النتيجة فقط.
+- إذا أرسل النظام نتيجة برمجية لإجابة الطالب، فهي نهائية.
+- لا تعد تقييم الإجابة بنفسك.
+- اشرح النتيجة بما يناسب مستوى الطالب.
 
 منع الهلوسة:
-
 - لا تخترع إجابات.
 - لا تخترع خيارات.
 - لا تخترع أسئلة تدريبية.
@@ -440,9 +736,8 @@ const BASE_SYSTEM_PROMPT = `
 - إذا تعذر تحديد معلومة من المعطيات، قل ذلك بوضوح.
 
 الإملاء والكتابة:
-
 - اكتب بالعربية الفصحى الواضحة.
-- راجع الإملاء والنحو والصياغة قبل إخراج الرد.
+- راجع الإملاء والنحو والصياغة قبل الرد.
 - راجع الهمزات والتاء المربوطة والتاء المفتوحة.
 - لا تكتب كلمات ملتصقة.
 - لا تكرر الحروف بالخطأ.
@@ -451,24 +746,14 @@ const BASE_SYSTEM_PROMPT = `
 - لا تكتب \\n أو \\t كنص ظاهر.
 
 تنسيق الرد:
-
 - استخدم نصاً عادياً فقط.
 - لا تستخدم Markdown.
-- لا تستخدم علامات الشباك لإنشاء العناوين.
+- لا تستخدم علامات الشباك للعناوين.
 - لا تستخدم النجمتين لتغليظ النص.
-- لا تستخدم الشرطة السفلية للتنسيق.
 - لا تستخدم HTML.
-- لا تستخدم علامات الاقتباس البرمجية.
 - اكتب العناوين مباشرة دون رموز.
 - استخدم الأسطر الفارغة لتنظيم الشرح.
 - لا تغير نص السؤال أو الخيارات الأصلية من البنك.
-
-الأسلوب:
-
-- ابدأ بالإجابة المباشرة ثم الشرح.
-- استخدم العناوين القصيرة عند الحاجة.
-- تجنب الفقرات الطويلة.
-- كن موجزاً في السهل ومفصلاً في الصعب.
 `;
 
 // =========================================================
@@ -557,9 +842,7 @@ async function getPlatformStats(
       e
     );
 
-    if (
-      !platformStatsCache
-    ) {
+    if (!platformStatsCache) {
       platformStatsCache = {
         sections: 0,
         questions: 0,
@@ -572,15 +855,8 @@ async function getPlatformStats(
 }
 
 // =========================================================
-// 🤖 تحليل مستوى الطالب
+// 📊 تصنيف المهارة
 // =========================================================
-
-interface SkillStat {
-  name: string;
-  correct: number;
-  total: number;
-  accuracy: number;
-}
 
 function classifySkill(
   accuracy: number,
@@ -590,9 +866,9 @@ function classifySkill(
   | "متوسط"
   | "ضعف"
   | "غير كافٍ" {
-  const MIN_SAMPLE = 8;
-
-  if (total < MIN_SAMPLE) {
+  if (
+    total < MIN_SKILL_SAMPLE
+  ) {
     return "غير كافٍ";
   }
 
@@ -607,14 +883,25 @@ function classifySkill(
   return "متوسط";
 }
 
+// =========================================================
+// 🧠 بناء ملف الطالب من النتائج الحقيقية
+// =========================================================
+
 async function buildStudentProfile(
   app: FastifyInstance,
   userId: string
-) {
+): Promise<InternalStudentProfile | null> {
+  /*
+   * QuestionAttempt هو نفس المصدر الذي تحفظ فيه
+   * recordQuestionAttempt كل إجابة للطالب.
+   *
+   * نقرأ أحدث المحاولات أولاً.
+   */
   const attempts: Array<{
     sectionId: number;
     questionId: string;
     isCorrect: boolean;
+    createdAt: Date;
   }> =
     await app.prisma.questionAttempt.findMany({
       where: {
@@ -622,30 +909,33 @@ async function buildStudentProfile(
       },
 
       orderBy: {
-        createdAt:
-          "desc",
+        createdAt: "desc",
       },
 
-      take: 150,
+      take:
+        STUDENT_PROFILE_ATTEMPT_LIMIT,
 
       select: {
         sectionId: true,
         questionId: true,
         isCorrect: true,
+        createdAt: true,
       },
     });
 
-  if (
-    attempts.length === 0
-  ) {
+  if (attempts.length === 0) {
     return null;
   }
+
+  // =======================================================
+  // جلب الأقسام المرتبطة بمحاولات الطالب
+  // =======================================================
 
   const sectionIds = [
     ...new Set(
       attempts.map(
-        (a: any) =>
-          a.sectionId
+        (attempt) =>
+          attempt.sectionId
       )
     ),
   ];
@@ -660,149 +950,281 @@ async function buildStudentProfile(
 
       select: {
         id: true,
+        name: true,
+        category: true,
+        type: true,
         questions: true,
       },
     });
 
-  const qCategory =
-    new Map<
-      string,
-      string
-    >();
+  /*
+   * صفحة النتائج لديك تستخدم:
+   *
+   * ans.question.category || meta.name || "عام"
+   *
+   * هنا نطبق المنطق نفسه تقريباً.
+   *
+   * الأولوية:
+   * question.category
+   * ثم section.category
+   * ثم section.type
+   * ثم section.name
+   */
+  const questionCategory =
+    new Map<string, string>();
 
-  for (const sec of sections) {
+  const sectionCategory =
+    new Map<number, string>();
+
+  for (const section of sections) {
+    const fallbackCategory =
+      normalizeCategory(
+        section.category ||
+          section.type ||
+          section.name ||
+          `قسم ${section.id}`
+      );
+
+    sectionCategory.set(
+      section.id,
+      fallbackCategory
+    );
+
     const questions =
       Array.isArray(
-        sec.questions
+        section.questions
       )
-        ? sec.questions
+        ? section.questions
         : [];
 
     for (
-      const q of questions as Array<{
+      const question of questions as Array<{
         id?: string | number;
         category?: string;
       }>
     ) {
       if (
-        q &&
-        q.id !== undefined
+        !question ||
+        question.id === undefined
       ) {
-        qCategory.set(
-          String(q.id),
-
-          q.category ||
-            `قسم ${sec.id}`
-        );
+        continue;
       }
+
+      const category =
+        normalizeCategory(
+          question.category ||
+            fallbackCategory
+        );
+
+      questionCategory.set(
+        String(
+          question.id
+        ),
+        category
+      );
     }
   }
 
-  const stats =
+  // =======================================================
+  // تجميع المحاولات حسب الموضوع
+  // =======================================================
+
+  const attemptsBySkill =
     new Map<
       string,
-      SkillStat
+      Array<{
+        isCorrect: boolean;
+        createdAt: Date;
+      }>
     >();
 
-  for (const a of attempts) {
-    const cat =
-      qCategory.get(
-        String(
-          a.questionId
-        )
-      ) ||
-      `قسم ${a.sectionId}`;
+  for (const attempt of attempts) {
+    const category =
+      normalizeCategory(
+        questionCategory.get(
+          String(
+            attempt.questionId
+          )
+        ) ||
+          sectionCategory.get(
+            attempt.sectionId
+          ) ||
+          `قسم ${attempt.sectionId}`
+      );
 
-    const cur =
-      stats.get(cat) || {
-        name: cat,
-        correct: 0,
-        total: 0,
-        accuracy: 0,
-      };
+    const list =
+      attemptsBySkill.get(
+        category
+      ) || [];
 
-    cur.total += 1;
+    list.push({
+      isCorrect:
+        attempt.isCorrect,
 
-    if (a.isCorrect) {
-      cur.correct += 1;
-    }
+      createdAt:
+        attempt.createdAt,
+    });
 
-    stats.set(
-      cat,
-      cur
+    attemptsBySkill.set(
+      category,
+      list
     );
   }
+
+  // =======================================================
+  // حساب أداء كل مهارة
+  // =======================================================
 
   const skills:
     SkillStat[] = [];
 
   for (
-    const s of stats.values()
+    const [
+      name,
+      skillAttempts,
+    ] of attemptsBySkill.entries()
   ) {
-    s.accuracy =
-      Math.round(
-        (
-          s.correct /
-          s.total
-        ) * 100
+    /*
+     * attempts جاءت أصلاً مرتبة من الأحدث إلى الأقدم.
+     *
+     * لذلك أول 20 محاولة هنا هي الأداء الحديث.
+     */
+    const recentAttempts =
+      skillAttempts.slice(
+        0,
+        RECENT_SKILL_ATTEMPT_LIMIT
       );
 
-    skills.push(s);
+    const recentCorrect =
+      recentAttempts.filter(
+        (attempt) =>
+          attempt.isCorrect
+      ).length;
+
+    const recentTotal =
+      recentAttempts.length;
+
+    const recentAccuracy =
+      recentTotal > 0
+        ? Math.round(
+            (
+              recentCorrect /
+              recentTotal
+            ) * 100
+          )
+        : 0;
+
+    // كامل السجل الذي قرأناه
+    const historicalCorrect =
+      skillAttempts.filter(
+        (attempt) =>
+          attempt.isCorrect
+      ).length;
+
+    const historicalTotal =
+      skillAttempts.length;
+
+    const historicalAccuracy =
+      historicalTotal > 0
+        ? Math.round(
+            (
+              historicalCorrect /
+              historicalTotal
+            ) * 100
+          )
+        : 0;
+
+    skills.push({
+      name,
+
+      correct:
+        recentCorrect,
+
+      total:
+        recentTotal,
+
+      accuracy:
+        recentAccuracy,
+
+      historicalCorrect,
+
+      historicalTotal,
+
+      historicalAccuracy,
+    });
   }
 
+  // الأضعف حديثاً أولاً
   skills.sort(
     (a, b) =>
       a.accuracy -
       b.accuracy
   );
 
+  // =======================================================
+  // نقاط القوة والضعف بحسب الأداء الحديث
+  // =======================================================
+
   const strengths =
     skills
       .filter(
-        (s) =>
+        (skill) =>
           classifySkill(
-            s.accuracy,
-            s.total
+            skill.accuracy,
+            skill.total
           ) === "قوة"
       )
       .map(
-        (s) => s.name
+        (skill) =>
+          skill.name
       );
 
   const weaknesses =
     skills
       .filter(
-        (s) =>
+        (skill) =>
           classifySkill(
-            s.accuracy,
-            s.total
+            skill.accuracy,
+            skill.total
           ) === "ضعف"
       )
       .map(
-        (s) => s.name
+        (skill) =>
+          skill.name
       );
+
+  // =======================================================
+  // المستوى العام
+  // =======================================================
 
   const totalCorrect =
     attempts.filter(
-      (a) => a.isCorrect
+      (attempt) =>
+        attempt.isCorrect
     ).length;
 
   const total =
     attempts.length;
 
+  const accuracy =
+    total > 0
+      ? Math.round(
+          (
+            totalCorrect /
+            total
+          ) * 100
+        )
+      : 0;
+
   return {
     skills,
     strengths,
     weaknesses,
-    solvedQuestions: total,
 
-    accuracy:
-      Math.round(
-        (
-          totalCorrect /
-          total
-        ) * 100
-      ),
+    solvedQuestions:
+      total,
+
+    accuracy,
   };
 }
 
@@ -832,6 +1254,9 @@ async function fetchSimilarQuestion(
 
       select: {
         id: true,
+        name: true,
+        category: true,
+        type: true,
         questions: true,
       },
 
@@ -841,6 +1266,7 @@ async function fetchSimilarQuestion(
   const all: Array<{
     question: any;
     sectionId: number;
+    effectiveCategory: string;
   }> = [];
 
   for (const sec of sections) {
@@ -856,10 +1282,20 @@ async function fetchSimilarQuestion(
           q &&
           q.question
         ) {
+          const effectiveCategory =
+            normalizeCategory(
+              q.category ||
+                sec.category ||
+                sec.type ||
+                sec.name ||
+                `قسم ${sec.id}`
+            );
+
           all.push({
             question: q,
             sectionId:
               sec.id,
+            effectiveCategory,
           });
         }
       }
@@ -869,14 +1305,16 @@ async function fetchSimilarQuestion(
   let pool = all;
 
   if (category) {
+    const normalizedWanted =
+      normalizeCategory(
+        category
+      );
+
     const exact =
       all.filter(
         (x) =>
-          (
-            x.question
-              .category ||
-            ""
-          ) === category
+          x.effectiveCategory ===
+          normalizedWanted
       );
 
     if (
@@ -886,26 +1324,17 @@ async function fetchSimilarQuestion(
     } else {
       pool =
         all.filter(
-          (x) => {
-            const c =
-              String(
-                x.question
-                  .category ||
-                  ""
-              );
-
-            return (
-              c.includes(
-                category
-              ) ||
-              category.includes(
-                c
-              )
-            );
-          }
+          (x) =>
+            x.effectiveCategory.includes(
+              normalizedWanted
+            ) ||
+            normalizedWanted.includes(
+              x.effectiveCategory
+            )
         );
     }
 
+    // ممنوع خلط الفئات
     if (
       pool.length === 0
     ) {
@@ -917,8 +1346,7 @@ async function fetchSimilarQuestion(
     pool =
       pool.filter(
         (x) =>
-          x.question
-            .question !==
+          x.question.question !==
           excludeText
       );
   }
@@ -939,53 +1367,41 @@ async function fetchSimilarQuestion(
 
   return {
     question:
-      pick.question
-        .question,
+      pick.question.question,
 
     options:
       Array.isArray(
-        pick.question
-          .options
+        pick.question.options
       )
-        ? pick.question
-            .options
+        ? pick.question.options
         : [],
 
     correctIndex:
-      typeof pick
-        .question
-        .correctIndex ===
+      typeof pick.question.correctIndex ===
       "number"
-        ? pick.question
-            .correctIndex
+        ? pick.question.correctIndex
         : 0,
 
     category:
-      pick.question
-        .category,
+      pick.effectiveCategory,
 
     explanation:
-      pick.question
-        .explanation,
+      pick.question.explanation,
 
-    passage: String(
-      pick.question
-        .passage ||
-        pick.question
-          .context ||
-        pick.question
-          .passageText ||
-        pick.question
-          .readingPassage ||
-        pick.question
-          .paragraph ||
-        ""
-    ),
+    passage:
+      String(
+        pick.question.passage ||
+          pick.question.context ||
+          pick.question.passageText ||
+          pick.question.readingPassage ||
+          pick.question.paragraph ||
+          ""
+      ),
   };
 }
 
 // =========================================================
-// 🔍 كشف النية
+// 🔍 النية
 // =========================================================
 
 function detectIntent(
@@ -1007,8 +1423,7 @@ function detectIntent(
     )
   ) {
     return {
-      action:
-        "similar",
+      action: "similar",
     };
   }
 
@@ -1018,8 +1433,7 @@ function detectIntent(
     )
   ) {
     return {
-      action:
-        "harder",
+      action: "harder",
     };
   }
 
@@ -1029,8 +1443,7 @@ function detectIntent(
     )
   ) {
     return {
-      action:
-        "easier",
+      action: "easier",
     };
   }
 
@@ -1107,7 +1520,8 @@ async function saveConversationTurn(
     if (recent) {
       await app.prisma.aiConversation.update({
         where: {
-          id: recent.id,
+          id:
+            recent.id,
         },
 
         data: {
@@ -1151,8 +1565,7 @@ export async function aiRoutes(
       reply
     ) => {
       const origin =
-        request.headers
-          .origin ||
+        request.headers.origin ||
         "*";
 
       reply
@@ -1191,6 +1604,7 @@ export async function aiRoutes(
       preHandler:
         app.authenticate,
     },
+
     async (
       request,
       reply
@@ -1210,8 +1624,7 @@ export async function aiRoutes(
         return reply
           .status(401)
           .send({
-            success:
-              false,
+            success: false,
 
             message:
               "يجب تسجيل الدخول.",
@@ -1235,7 +1648,7 @@ export async function aiRoutes(
   );
 
   // =======================================================
-  // QUOTA STATUS
+  // QUOTA
   // =======================================================
 
   app.get(
@@ -1244,6 +1657,7 @@ export async function aiRoutes(
       preHandler:
         app.authenticate,
     },
+
     async (
       _request,
       reply
@@ -1269,7 +1683,6 @@ export async function aiRoutes(
           remaining:
             Math.max(
               0,
-
               PRIMARY_DAILY_CAP -
                 getUsage(
                   PRIMARY_MODEL
@@ -1292,7 +1705,6 @@ export async function aiRoutes(
           remaining:
             Math.max(
               0,
-
               SECONDARY_DAILY_CAP -
                 getUsage(
                   SECONDARY_MODEL
@@ -1315,7 +1727,6 @@ export async function aiRoutes(
           remaining:
             Math.max(
               0,
-
               FALLBACK_DAILY_CAP -
                 getUsage(
                   FALLBACK_MODEL
@@ -1336,6 +1747,7 @@ export async function aiRoutes(
       preHandler:
         app.authenticate,
     },
+
     async (
       request,
       reply
@@ -1355,8 +1767,7 @@ export async function aiRoutes(
         return reply
           .status(401)
           .send({
-            success:
-              false,
+            success: false,
 
             message:
               "يجب تسجيل الدخول.",
@@ -1376,16 +1787,13 @@ export async function aiRoutes(
         };
 
       if (
-        rating !==
-          "up" &&
-        rating !==
-          "down"
+        rating !== "up" &&
+        rating !== "down"
       ) {
         return reply
           .status(400)
           .send({
-            success:
-              false,
+            success: false,
 
             message:
               "قيمة تقييم غير صالحة.",
@@ -1427,6 +1835,7 @@ export async function aiRoutes(
       preHandler:
         app.authenticate,
     },
+
     async (
       request,
       reply
@@ -1439,8 +1848,7 @@ export async function aiRoutes(
         return reply
           .status(500)
           .send({
-            success:
-              false,
+            success: false,
 
             message:
               "لم يتم إعداد مفتاح الذكاء الاصطناعي.",
@@ -1462,8 +1870,7 @@ export async function aiRoutes(
         return reply
           .status(401)
           .send({
-            success:
-              false,
+            success: false,
 
             message:
               "يجب تسجيل الدخول.",
@@ -1483,8 +1890,7 @@ export async function aiRoutes(
         return reply
           .status(429)
           .send({
-            success:
-              false,
+            success: false,
 
             message:
               "لقد استخدمت الحد الأقصى من الأسئلة لهذه الساعة. حاول مجدداً بعد قليل.",
@@ -1504,8 +1910,8 @@ export async function aiRoutes(
             options: string[];
             correctIndex: number;
             category?: string;
-            passage?: string;
 
+            passage?: string;
             context?: string;
             passageText?: string;
             readingPassage?: string;
@@ -1562,13 +1968,14 @@ export async function aiRoutes(
 
             parts: [
               {
-                text: String(
-                  m.text ||
-                    ""
-                ).slice(
-                  0,
-                  1500
-                ),
+                text:
+                  String(
+                    m.text ||
+                      ""
+                  ).slice(
+                    0,
+                    1500
+                  ),
               },
             ],
           });
@@ -1731,8 +2138,7 @@ export async function aiRoutes(
         const isReadingComprehension =
           cq.category ===
             "استيعاب المقروء" ||
-          passage.length >
-            0;
+          passage.length > 0;
 
         const explainMsg =
           [
@@ -1744,7 +2150,7 @@ export async function aiRoutes(
             "",
 
             passage
-              ? `========== قطعة الاستيعاب المقروء ==========\n${passage}\n========== نهاية القطعة ==========`
+              ? `قطعة الاستيعاب المقروء:\n${passage}`
               : "",
 
             "",
@@ -1778,9 +2184,9 @@ export async function aiRoutes(
             isReadingComprehension
               ? [
                   "هذه مسألة استيعاب مقروء.",
-                  "اقرأ قطعة الاستيعاب كاملة قبل تحليل السؤال.",
+                  "اقرأ القطعة كاملة قبل التحليل.",
                   "اعتبر القطعة المصدر الأساسي للإجابة.",
-                  "اربط بين المعلومات الواردة في القطعة عند الحاجة.",
+                  "اربط المعلومات الواردة فيها عند الحاجة.",
                   "لا تستخدم معلومات خارجية لإثبات الإجابة.",
                 ].join(
                   "\n"
@@ -1789,14 +2195,11 @@ export async function aiRoutes(
 
             "",
 
-            "اشرح هذا السؤال بالضبط.",
+            "اشرح هذا السؤال وفق مستوى الشرح الذي حدده النظام للطالب.",
             "استخدم السؤال والخيارات المرسلة فقط.",
             "ممنوع تغيير السؤال أو الخيارات.",
             "ممنوع إضافة خيارات جديدة.",
             "اعتمد على الإجابة الصحيحة المؤكدة ولا تغيرها.",
-            "وضح لماذا الإجابة صحيحة.",
-            "وضح لماذا أقوى مشتت خاطئ غير صحيح.",
-            "اذكر القاعدة المفيدة لسؤال مشابه.",
           ]
             .filter(
               Boolean
@@ -1853,6 +2256,10 @@ export async function aiRoutes(
             });
         }
 
+        // ===================================================
+        // إجابة اختبار معلق
+        // ===================================================
+
         const pending =
           getPendingQuiz(
             userId
@@ -1875,14 +2282,16 @@ export async function aiRoutes(
 
             const correctOption =
               pending.options[
-                pending
-                  .correctIndex
+                pending.correctIndex
               ];
 
             const studentOption =
               pending.options[
                 matchedIndex
               ];
+
+            currentCategory =
+              pending.category;
 
             const verificationMsg =
               [
@@ -1908,8 +2317,7 @@ export async function aiRoutes(
                     i
                   ) =>
                     `${
-                      i +
-                      1
+                      i + 1
                     }) ${o}`
                 ),
 
@@ -1928,8 +2336,8 @@ export async function aiRoutes(
                 "",
 
                 isCorrect
-                  ? "أخبر الطالب أنه أصاب واشرح السبب والقاعدة بإيجاز."
-                  : "اشرح لماذا الإجابة الصحيحة هي الصائبة ولماذا اختياره مشتت.",
+                  ? "اشرح سبب صحة الإجابة والقاعدة بما يناسب مستوى الطالب."
+                  : "اشرح لماذا الإجابة الصحيحة هي الصائبة ولماذا اختيار الطالب كان مشتتاً، بما يناسب مستوى الطالب.",
 
                 "",
 
@@ -1983,6 +2391,10 @@ export async function aiRoutes(
           }
         }
 
+        // ===================================================
+        // الطلب العادي
+        // ===================================================
+
         if (
           !verifiedAnswerHandled
         ) {
@@ -2000,6 +2412,9 @@ export async function aiRoutes(
               lastCategoryStore.get(
                 userId
               );
+
+            currentCategory =
+              effectiveCategory;
 
             const bank =
               await fetchSimilarQuestion(
@@ -2028,9 +2443,7 @@ export async function aiRoutes(
                 bank.correctIndex <
                   bank.options.length;
 
-              if (
-                !validBank
-              ) {
+              if (!validBank) {
                 contents.push({
                   role:
                     "user",
@@ -2061,8 +2474,7 @@ export async function aiRoutes(
                         i
                       ) =>
                         `${
-                          i +
-                          1
+                          i + 1
                         }) ${o}`
                     )
                     .join(
@@ -2113,6 +2525,18 @@ export async function aiRoutes(
                 );
 
                 if (
+                  bank.category
+                ) {
+                  currentCategory =
+                    bank.category;
+
+                  lastCategoryStore.set(
+                    userId,
+                    bank.category
+                  );
+                }
+
+                if (
                   bank.category &&
                   DEEP_REASONING_CATEGORIES.has(
                     bank.category
@@ -2124,7 +2548,8 @@ export async function aiRoutes(
               }
             } else {
               contents.push({
-                role: "user",
+                role:
+                  "user",
 
                 parts: [
                   {
@@ -2135,8 +2560,15 @@ export async function aiRoutes(
               });
             }
           } else {
+            currentCategory =
+              currentCategory ||
+              lastCategoryStore.get(
+                userId
+              );
+
             contents.push({
-              role: "user",
+              role:
+                "user",
 
               parts: [
                 {
@@ -2150,36 +2582,19 @@ export async function aiRoutes(
       }
 
       // =====================================================
-      // ملف الطالب
+      // 🧠 قراءة نتائج الطالب الحقيقية
       // =====================================================
 
-      let studentProfile =
-        body?.studentProfile;
+      let internalProfile:
+        | InternalStudentProfile
+        | null = null;
 
       try {
-        const profile =
+        internalProfile =
           await buildStudentProfile(
             app,
             userId
           );
-
-        if (profile) {
-          studentProfile = {
-            ...studentProfile,
-
-            solvedQuestions:
-              profile.solvedQuestions,
-
-            accuracy:
-              profile.accuracy,
-
-            strengths:
-              profile.strengths,
-
-            weaknesses:
-              profile.weaknesses,
-          };
-        }
       } catch (e) {
         console.error(
           "AI profile build error:",
@@ -2188,51 +2603,153 @@ export async function aiRoutes(
       }
 
       // =====================================================
+      // 🎯 المهارة الحالية
+      // =====================================================
+
+      const effectiveCategory =
+        normalizeCategory(
+          currentCategory ||
+            cq?.category ||
+            lastCategoryStore.get(
+              userId
+            ) ||
+            ""
+        ) || undefined;
+
+      // =====================================================
+      // 🎯 تحديد عمق الشرح
+      // =====================================================
+
+      const teaching =
+        determineTeachingDepth(
+          internalProfile,
+          effectiveCategory
+        );
+
+      const teachingInstruction =
+        buildTeachingInstruction(
+          teaching.depth
+        );
+
+      // =====================================================
       // SYSTEM PROMPT
       // =====================================================
 
       let dynamicSystemPrompt =
         BASE_SYSTEM_PROMPT;
 
+      dynamicSystemPrompt +=
+        teachingInstruction;
+
+      // =====================================================
+      // 📊 بيانات الطالب للمعلم
+      // =====================================================
+
       if (
-        studentProfile
+        internalProfile
       ) {
         dynamicSystemPrompt +=
-          `\n\nبيانات الطالب الحالية، استخدمها للتخصيص فقط:\n` +
+          `
 
-          `أسئلة محلولة: ${
-            studentProfile.solvedQuestions ??
-            "غير معروف"
-          }\n` +
+بيانات تعليمية داخلية حقيقية مأخوذة من نتائج الطالب في المنصة.
+لا تعرض هذه البيانات للطالب من تلقاء نفسك.
 
-          `الدقة العامة: ${
-            studentProfile.accuracy !=
-            null
-              ? `${studentProfile.accuracy}%`
-              : "غير معروف"
-          }\n` +
+إجمالي أحدث المحاولات المقروءة: ${internalProfile.solvedQuestions}
+الدقة العامة في هذه المحاولات: ${internalProfile.accuracy}%
+`;
 
-          `${
-            studentProfile.strengths
-              ?.length
-              ? `نقاط القوة: ${studentProfile.strengths.join(
-                  "، "
-                )}\n`
-              : ""
-          }` +
+        if (
+          effectiveCategory
+        ) {
+          dynamicSystemPrompt +=
+            `المهارة الحالية: ${effectiveCategory}\n`;
+        }
 
-          `${
-            studentProfile.weaknesses
-              ?.length
-              ? `نقاط الضعف: ${studentProfile.weaknesses.join(
-                  "، "
-                )}`
-              : ""
-          }`;
+        if (
+          teaching.skill
+        ) {
+          dynamicSystemPrompt +=
+            `
+أداء الطالب الحديث في المهارة الحالية:
+آخر ${teaching.skill.total} محاولة متاحة:
+الصحيح: ${teaching.skill.correct}
+الدقة الحديثة: ${teaching.skill.accuracy}%
+
+الأداء الأوسع في السجل المقروء لهذه المهارة:
+عدد المحاولات: ${teaching.skill.historicalTotal}
+الصحيح: ${teaching.skill.historicalCorrect}
+الدقة: ${teaching.skill.historicalAccuracy}%
+`;
+        } else if (
+          effectiveCategory
+        ) {
+          dynamicSystemPrompt +=
+            `
+لا توجد عينة كافية ومطابقة للمهارة الحالية.
+لا تفترض أن الطالب متقدم أو ضعيف اعتماداً على تخمين.
+`;
+        }
+
+        if (
+          internalProfile.strengths.length >
+          0
+        ) {
+          dynamicSystemPrompt +=
+            `
+المهارات ذات الأداء القوي حديثاً:
+${internalProfile.strengths.join(
+  "، "
+)}
+`;
+        }
+
+        if (
+          internalProfile.weaknesses.length >
+          0
+        ) {
+          dynamicSystemPrompt +=
+            `
+المهارات التي تحتاج عناية أكبر:
+${internalProfile.weaknesses.join(
+  "، "
+)}
+`;
+        }
+      } else if (
+        body.studentProfile
+      ) {
+        dynamicSystemPrompt +=
+          `
+
+لا توجد حتى الآن بيانات كافية محفوظة في QuestionAttempt.
+توجد بيانات احتياطية من الواجهة.
+استخدمها بحذر ولا تعرضها من تلقاء نفسك.
+
+الدقة العامة: ${
+            body.studentProfile
+              .accuracy != null
+              ? `${body.studentProfile.accuracy}%`
+              : "غير معروفة"
+          }
+`;
       }
 
       // =====================================================
-      // معرفة المنصة
+      // 🔄 الطالب لم يفهم
+      // =====================================================
+
+      if (
+        !cq &&
+        isConfusionMessage(
+          body.question
+        )
+      ) {
+        dynamicSystemPrompt +=
+          REEXPLAIN_INSTRUCTION;
+      }
+
+      // =====================================================
+      // 🏫 معرفة المنصة
       // =====================================================
 
       try {
@@ -2256,6 +2773,25 @@ export async function aiRoutes(
               )
             );
       } catch {}
+
+      // =====================================================
+      // ✅ تعليمات نهائية
+      // =====================================================
+
+      dynamicSystemPrompt += `
+
+تعليمات نهائية للتخصيص:
+- مستوى الشرح تم تحديده برمجياً من نتائج الطالب الحقيقية المسجلة في المنصة.
+- إذا توفرت بيانات كافية عن المهارة الحالية، فهي أهم من النسبة العامة.
+- الأداء الحديث أهم من الأخطاء القديمة.
+- لا تعتبر نسبة مرتفعة في عدد قليل جداً من الأسئلة دليلاً كافياً على الإتقان.
+- لا تغير عمق الشرح عشوائياً.
+- لا تذكر التصنيف الداخلي للطالب.
+- لا تذكر الدقة أو عدد المحاولات إلا إذا طلب الطالب إحصائياته صراحة.
+- إذا كان الشرح تأسيسياً، فلا تفترض معرفة الأساس.
+- إذا كان الشرح متقدماً، فلا تكرر الأساسيات دون حاجة.
+- حافظ دائماً على السؤال والخيارات والإجابة المؤكدة من النظام.
+`;
 
       // =====================================================
       // CONFIG
@@ -2297,7 +2833,7 @@ export async function aiRoutes(
       };
 
       // =====================================================
-      // ✅ قائمة النماذج بالترتيب
+      // ✅ النماذج
       // =====================================================
 
       const candidates: Array<{
@@ -2305,10 +2841,7 @@ export async function aiRoutes(
         url: string;
       }> = [];
 
-      // =====================================================
-      // 1) Gemini 3.7 Flash — 20
-      // =====================================================
-
+      // 1) Gemini 3.7 Flash
       if (
         !isModelAtCap(
           PRIMARY_MODEL,
@@ -2339,10 +2872,7 @@ export async function aiRoutes(
         });
       }
 
-      // =====================================================
       // 2) Gemini 3.5 Flash Lite
-      // =====================================================
-
       if (
         !isModelAtCap(
           SECONDARY_MODEL,
@@ -2360,10 +2890,7 @@ export async function aiRoutes(
         });
       }
 
-      // =====================================================
       // 3) Gemini 3.1 Flash Lite
-      // =====================================================
-
       if (
         !isModelAtCap(
           FALLBACK_MODEL,
@@ -2382,8 +2909,7 @@ export async function aiRoutes(
       }
 
       if (
-        candidates.length ===
-        0
+        candidates.length === 0
       ) {
         return reply
           .status(503)
@@ -2430,10 +2956,10 @@ export async function aiRoutes(
       const outgoingUserText =
         cq?.question
           ? [
-              `📌 السؤال: ${cq.question}`,
+              `السؤال: ${cq.question}`,
 
               cq.passage
-                ? `📖 قطعة الاستيعاب:\n${cq.passage}`
+                ? `قطعة الاستيعاب:\n${cq.passage}`
                 : "",
             ]
               .filter(
@@ -2500,7 +3026,7 @@ export async function aiRoutes(
                 cand;
 
               console.log(
-                `[Gemini] ✅ يعمل عبر ${cand.model}`
+                `[Gemini] يعمل عبر ${cand.model}`
               );
 
               break;
@@ -2514,8 +3040,7 @@ export async function aiRoutes(
                 await res.json();
 
               errMsg =
-                e?.error
-                  ?.message ||
+                e?.error?.message ||
                 errMsg;
             } catch {}
 
@@ -2523,30 +3048,25 @@ export async function aiRoutes(
               `${res.status} ${errMsg}`;
 
             console.error(
-              `[Gemini] ❌ ${cand.model}:`,
+              `[Gemini] فشل ${cand.model}:`,
               lastErrMsg
             );
 
-            // الانتقال دائماً للنموذج التالي
-            // إذا كان هناك نموذج آخر.
             continue;
           } catch (
             fetchErr: any
           ) {
             lastErrMsg =
-              fetchErr
-                ?.message ||
+              fetchErr?.message ||
               "fetch error";
 
             console.error(
-              `[Gemini] ❌ ${cand.model}:`,
+              `[Gemini] خطأ ${cand.model}:`,
               lastErrMsg
             );
 
             if (
-              controller
-                .signal
-                .aborted
+              controller.signal.aborted
             ) {
               break;
             }
@@ -2590,13 +3110,17 @@ export async function aiRoutes(
           )}`
         );
 
+        // معلومات مفيدة لك في Logs
+        console.log(
+          `[Adaptive Teaching] user=${userId} category=${effectiveCategory || "unknown"} depth=${teaching.depth} source=${teaching.source} skillAccuracy=${teaching.skill?.accuracy ?? "N/A"} skillAttempts=${teaching.skill?.total ?? 0}`
+        );
+
         // ===================================================
         // SSE
         // ===================================================
 
         const origin =
-          request.headers
-            .origin ||
+          request.headers.origin ||
           "*";
 
         reply.raw.writeHead(
@@ -2639,6 +3163,7 @@ export async function aiRoutes(
           );
 
         let buffer = "";
+
         let emitted =
           false;
 
@@ -2732,7 +3257,10 @@ export async function aiRoutes(
           }
         }
 
-        // آخر buffer
+        // ===================================================
+        // آخر Buffer
+        // ===================================================
+
         if (
           buffer
             .trim()
@@ -2800,8 +3328,7 @@ export async function aiRoutes(
           reply.raw.write(
             `data: ${JSON.stringify(
               {
-                done:
-                  true,
+                done: true,
 
                 model:
                   chosen.model,
@@ -2824,8 +3351,7 @@ export async function aiRoutes(
 
         try {
           if (
-            !reply.raw
-              .headersSent
+            !reply.raw.headersSent
           ) {
             return reply
               .status(500)
@@ -2853,11 +3379,14 @@ export async function aiRoutes(
         );
 
         if (
-          !reply.raw
-            .writableEnded
+          !reply.raw.writableEnded
         ) {
           reply.raw.end();
         }
+
+        // ===================================================
+        // 💾 حفظ المحادثة
+        // ===================================================
 
         if (
           outgoingUserText &&
@@ -2874,8 +3403,7 @@ export async function aiRoutes(
             ...priorHistory,
 
             {
-              role:
-                "user",
+              role: "user",
 
               text:
                 outgoingUserText,
