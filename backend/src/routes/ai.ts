@@ -2259,6 +2259,38 @@ export async function aiRoutes(
       }
 
       // =====================================================
+      // ⚡ ابدأ القراءات المستقلة فوراً بالتوازي
+      //
+      // نطلقها الآن بدل ما ننتظر بناء الرسالة (contents)،
+      // عشان تشتغل بالخلفية بينما نجهز السؤال/القطعة.
+      // نفس النتيجة تماماً، بس أسرع لأنها تتداخل زمنياً
+      // مع باقي المعالجة بدل ما تنتظرها.
+      // =====================================================
+
+      const profileStartedAt =
+        Date.now();
+
+      const studentProfilePromise =
+        getCachedStudentProfile(
+          app,
+          userId
+        ).catch(
+          (error) => {
+            console.error(
+              "AI profile build error:",
+              error
+            );
+
+            return null;
+          }
+        );
+
+      const statsPromise =
+        getPlatformStats(
+          app
+        );
+
+      // =====================================================
       // BODY
       // =====================================================
 
@@ -2991,35 +3023,14 @@ export async function aiRoutes(
       }
 
       // =====================================================
-      // 🧠 قراءة نتائج الطالب الحقيقية + إحصائيات المنصة
-      //     (بالتوازي بدل التتابع)
+      // 🧠 نتيجة القراءات اللي بدأناها بالتوازي من الأعلى
+      //     (studentProfilePromise و statsPromise)
       // =====================================================
 
-      const profileStartedAt =
-        Date.now();
-
-      const statsPromise =
-        getPlatformStats(
-          app
-        );
-
-      let internalProfile:
-        | InternalStudentProfile
-        | null =
-        null;
-
-      try {
-        internalProfile =
-          await getCachedStudentProfile(
-            app,
-            userId
-          );
-      } catch (error) {
-        console.error(
-          "AI profile build error:",
-          error
-        );
-      }
+      const internalProfile:
+        InternalStudentProfile |
+        null =
+        await studentProfilePromise;
 
       console.log(
         `[AI profile] ${Date.now() - profileStartedAt}ms`
