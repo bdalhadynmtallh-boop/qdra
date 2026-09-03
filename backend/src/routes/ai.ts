@@ -42,10 +42,16 @@ import { FastifyInstance } from "fastify";
    - نفس إعداد التفكير لكل النماذج
    - low للأسئلة العادية
    - medium للأسئلة العميقة
-   - maxOutputTokens = 7000
+   - maxOutputTokens = 16000 (رُفع من 7000 لتفادي القطع بسبب MAX_TOKENS)
    - timeout مستقل لكل نموذج
    - Cache لملف الطالب (90 ثانية)
    - تشغيل ملف الطالب وإحصائيات المنصة بالتوازي
+
+   ⭐ تحديث معالجة الانقطاع (finishReason):
+   - يتم الآن قراءة finishReason من كل chunk قادم من Gemini.
+   - إذا توقف النموذج بسبب MAX_TOKENS (أو أي سبب غير STOP)،
+     يُرسل هذا للواجهة الأمامية ضمن حدث done عبر الحقل truncated،
+     بدل ما تُعرض الإجابة الناقصة وكأنها مكتملة.
 ========================================================= */
 
 // =========================================================
@@ -3427,10 +3433,19 @@ ${internalProfile.weaknesses.join(
           useDeepReasoning
         );
 
-      // ⭐ الحد الأقصى للإخراج = 7000
+      // ⭐ الحد الأقصى للإخراج رُفع إلى 16000 لتفادي القطع
+      // بسبب استهلاك توكنز التفكير الداخلي (thinking) من نفس
+      // ميزانية maxOutputTokens.
+      const MAX_OUTPUT_TOKENS =
+        Number(
+          process.env
+            .GEMINI_MAX_OUTPUT_TOKENS ||
+            16000
+        );
+
       const generationConfig = {
         maxOutputTokens:
-          7000,
+          MAX_OUTPUT_TOKENS,
 
         thinkingConfig: {
           thinkingLevel,
@@ -3545,6 +3560,10 @@ ${internalProfile.weaknesses.join(
 
       let fullAssistantText =
         "";
+
+      // ⭐ آخر finishReason شوهد أثناء الستريم (لمعرفة سبب التوقف)
+      let lastFinishReason:
+        string | null = null;
 
       const outgoingPassage =
         cq
@@ -3873,6 +3892,82 @@ ${internalProfile.weaknesses.join(
         let emitted =
           false;
 
+        // =================================================
+        // 🧩 معالجة chunk واحد قادم من Gemini
+        // (يستخرج النص ويلتقط finishReason)
+        // =================================================
+
+        const handleParsedChunk = (
+          chunk: any
+        ) => {
+          const candidate =
+            chunk
+              ?.candidates?.[0];
+
+          const finishReason =
+            candidate?.finishReason;
+
+          if (
+            typeof finishReason ===
+            "string"
+          ) {
+            lastFinishReason =
+              finishReason;
+
+            if (
+              finishReason !==
+              "STOP"
+            ) {
+              console.warn(
+                `[Gemini] finishReason غير طبيعي عبر ${chosen.model}: ${finishReason}`
+              );
+            }
+          }
+
+          const parts =
+            candidate
+              ?.content
+              ?.parts;
+
+          if (
+            !Array.isArray(
+              parts
+            )
+          ) {
+            return;
+          }
+
+          for (
+            const part of
+              parts
+          ) {
+            const piece =
+              part?.text;
+
+            if (
+              typeof piece !==
+                "string" ||
+              !piece
+            ) {
+              continue;
+            }
+
+            emitted =
+              true;
+
+            fullAssistantText +=
+              piece;
+
+            reply.raw.write(
+              `data: ${JSON.stringify(
+                {
+                  piece,
+                }
+              )}\n\n`
+            );
+          }
+        };
+
         while (true) {
           if (streamIdleTimer) {
             clearTimeout(
@@ -3959,49 +4054,9 @@ ${internalProfile.weaknesses.join(
                   jsonString
                 );
 
-              const parts =
+              handleParsedChunk(
                 chunk
-                  ?.candidates?.[0]
-                  ?.content
-                  ?.parts;
-
-              if (
-                !Array.isArray(
-                  parts
-                )
-              ) {
-                continue;
-              }
-
-              for (
-                const part of
-                  parts
-              ) {
-                const piece =
-                  part?.text;
-
-                if (
-                  typeof piece !==
-                    "string" ||
-                  !piece
-                ) {
-                  continue;
-                }
-
-                emitted =
-                  true;
-
-                fullAssistantText +=
-                  piece;
-
-                reply.raw.write(
-                  `data: ${JSON.stringify(
-                    {
-                      piece,
-                    }
-                  )}\n\n`
-                );
-              }
+              );
             } catch {
               // تجاهل chunk غير المكتمل
             }
@@ -4063,47 +4118,9 @@ ${internalProfile.weaknesses.join(
                 jsonString
               );
 
-            const parts =
+            handleParsedChunk(
               chunk
-                ?.candidates?.[0]
-                ?.content
-                ?.parts;
-
-            if (
-              !Array.isArray(
-                parts
-              )
-            ) {
-              continue;
-            }
-
-            for (
-              const part of
-                parts
-            ) {
-              const piece =
-                part?.text;
-
-              if (
-                typeof piece ===
-                  "string" &&
-                piece
-              ) {
-                emitted =
-                  true;
-
-                fullAssistantText +=
-                  piece;
-
-                reply.raw.write(
-                  `data: ${JSON.stringify(
-                    {
-                      piece,
-                    }
-                  )}\n\n`
-                );
-              }
-            }
+            );
           } catch {
             // تجاهل
           }
@@ -4112,6 +4129,11 @@ ${internalProfile.weaknesses.join(
         // ===================================================
         // النهاية
         // ===================================================
+
+        // ⭐ هل توقف النموذج بسبب استنفاد الحد الأقصى للتوكنز؟
+        const truncatedByMaxTokens =
+          lastFinishReason ===
+          "MAX_TOKENS";
 
         if (
           !emitted
@@ -4135,8 +4157,25 @@ ${internalProfile.weaknesses.join(
                   chosen.model,
 
                 thinkingLevel,
+
+                // ⭐ جديد: تُعلم الواجهة الأمامية أن الإجابة
+                // توقفت قبل اكتمالها بسبب حد التوكنز.
+                truncated:
+                  truncatedByMaxTokens,
+
+                finishReason:
+                  lastFinishReason ||
+                  undefined,
               }
             )}\n\n`
+          );
+        }
+
+        if (
+          truncatedByMaxTokens
+        ) {
+          console.warn(
+            `[Gemini] الإجابة توقفت بسبب MAX_TOKENS | user=${userId} | model=${chosen.model} | maxOutputTokens=${MAX_OUTPUT_TOKENS} | thinking=${thinkingLevel}`
           );
         }
       } catch (error: any) {

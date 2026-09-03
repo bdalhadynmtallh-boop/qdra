@@ -42,6 +42,7 @@ interface Message {
   role: "user" | "assistant";
   text: string;
   feedback?: "up" | "down";
+  truncated?: boolean;
 }
 
 interface HistoryMessage {
@@ -95,6 +96,13 @@ const QUICK_ACTIONS: {
       "أعطني سؤالًا مشابهًا لهذا السؤال للتدريب، مع خيارات، ثم انتظر إجابتي قبل شرح الحل.",
   },
 ];
+
+/* =========================================================
+   ⭐ أمر متابعة الشرح المقطوع
+   ========================================================= */
+
+const CONTINUE_PROMPT =
+  "أكمل الشرح من حيث توقفت بالضبط، دون إعادة ما سبق ذكره.";
 
 /* =========================================================
    🎓 المعلم الذكي
@@ -397,6 +405,10 @@ export default function AiChatWidget() {
           let fullAssistantText = "";
           let streamFinished = false;
 
+          // ⭐ هل أعلن الخادم أن الإجابة توقفت قبل اكتمالها
+          // (finishReason === "MAX_TOKENS")؟
+          let wasTruncated = false;
+
           /* =====================================================
              🧩 معالجة سطر SSE
              ===================================================== */
@@ -452,6 +464,16 @@ export default function AiChatWidget() {
               ) {
                 streamFinished =
                   true;
+
+                // ⭐ الباك إند يرسل truncated=true عندما يتوقف
+                // النموذج بسبب MAX_TOKENS بدل ما يكمل الإجابة.
+                if (
+                  parsed.truncated ===
+                  true
+                ) {
+                  wasTruncated =
+                    true;
+                }
 
                 return;
               }
@@ -583,11 +605,55 @@ export default function AiChatWidget() {
             لا نعتبر انتهاء اتصال HTTP وحده
             دليلاً على نجاح البث.
             النجاح الحقيقي يكون عند وجود نص.
+
+            ⭐ لو انقطع الستريم دون حدث done صريح،
+            نعتبرها أيضًا إجابة مقطوعة ونبلغ المستخدم،
+            بدل ما نمرر الأمر بصمت في الكونسول فقط.
           */
 
           if (!streamFinished) {
             console.warn(
               "AI stream closed without explicit done event."
+            );
+
+            wasTruncated = true;
+          }
+
+          if (wasTruncated) {
+            setMessages((prev) => {
+              const updated = [
+                ...prev,
+              ];
+
+              const lastIndex =
+                updated.length - 1;
+
+              if (
+                lastIndex >= 0 &&
+                updated[
+                  lastIndex
+                ].role ===
+                  "assistant"
+              ) {
+                updated[
+                  lastIndex
+                ] = {
+                  ...updated[
+                    lastIndex
+                  ],
+                  truncated:
+                    true,
+                };
+              }
+
+              messagesRef.current =
+                updated;
+
+              return updated;
+            });
+
+            setError(
+              "توقف الشرح قبل اكتماله. اضغط \"أكمل الشرح\" لمتابعته."
             );
           }
         } catch (err: unknown) {
@@ -814,6 +880,21 @@ export default function AiChatWidget() {
   );
 
   /* =========================================================
+     ➡️ إكمال شرح مقطوع
+     ========================================================= */
+
+  const continueTruncated = useCallback(
+    () => {
+      if (loading) {
+        return;
+      }
+
+      send(CONTINUE_PROMPT);
+    },
+    [loading, send]
+  );
+
+  /* =========================================================
      👍👎 التقييم
      ========================================================= */
 
@@ -979,6 +1060,31 @@ export default function AiChatWidget() {
                       {m.text}
                     </div>
                   )}
+
+                  {/* ⭐ تنبيه + زر إكمال عند انقطاع الشرح */}
+
+                  {m.role ===
+                    "assistant" &&
+                    m.truncated && (
+                      <div className="mt-1.5 flex items-center justify-between gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2">
+                        <span className="text-[11px] font-semibold text-amber-300">
+                          الشرح توقف قبل اكتماله
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={
+                            continueTruncated
+                          }
+                          disabled={
+                            loading
+                          }
+                          className="press shrink-0 rounded-lg bg-amber-400/90 px-2.5 py-1 text-[11px] font-bold text-black transition hover:bg-amber-400 disabled:opacity-40"
+                        >
+                          أكمل الشرح
+                        </button>
+                      </div>
+                    )}
 
                   {m.role ===
                     "assistant" &&
