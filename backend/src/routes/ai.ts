@@ -4,11 +4,16 @@ import { FastifyInstance } from "fastify";
    🎓 المعلم الذكي في قُدرة — معلم شخصي متكيف وسريع
 
    ترتيب النماذج:
-   1) Gemini 3.7 Flash      — 20 طلباً يومياً
-   2) Gemini 3.6 Flash      — 20 طلباً يومياً
-   3) Gemini 3.5 Flash      — 20 طلباً يومياً
-   4) Gemini 3.5 Flash Lite — 500 طلب يومياً
-   5) Gemini 3.1 Flash Lite — 500 طلب يومياً
+   1) Gemini 3.8 Flash
+   2) Gemini 3.7 Flash
+   3) Gemini 3.6 Flash
+   4) Gemini 3.5 Flash
+   5) Gemini 3.5 Flash Lite
+   6) Gemini 3.1 Flash Lite
+
+   ملاحظة:
+   حدود cap أدناه هي حدود محلية اختيارية للتطبيق، وليست
+   بديلاً عن حدود المشروع الفعلية في Gemini/AI Studio.
 
    =========================================================
    المميزات المحفوظة:
@@ -52,6 +57,7 @@ import { FastifyInstance } from "fastify";
 // 🤖 نماذج Gemini
 // =========================================================
 
+const MODEL_38_FLASH = "gemini-3.8-flash";
 const MODEL_37_FLASH = "gemini-3.7-flash";
 const MODEL_36_FLASH = "gemini-3.6-flash";
 const MODEL_35_FLASH = "gemini-3.5-flash";
@@ -59,8 +65,12 @@ const MODEL_35_FLASH_LITE = "gemini-3.5-flash-lite";
 const MODEL_31_FLASH_LITE = "gemini-3.1-flash-lite";
 
 // =========================================================
-// 📊 الحدود اليومية
+// 📊 الحدود المحلية اليومية (اختيارية)
 // =========================================================
+
+const MODEL_38_DAILY_CAP = Number(
+  process.env.GEMINI_38_DAILY_CAP || 20
+);
 
 const MODEL_37_DAILY_CAP = Number(
   process.env.GEMINI_37_DAILY_CAP || 20
@@ -96,6 +106,10 @@ const GEMINI_STREAM_URL_FOR = (model: string) =>
 // =========================================================
 
 const GEMINI_MODELS = [
+  {
+    model: MODEL_38_FLASH,
+    cap: MODEL_38_DAILY_CAP,
+  },
   {
     model: MODEL_37_FLASH,
     cap: MODEL_37_DAILY_CAP,
@@ -252,6 +266,8 @@ function getUsage(
   );
 }
 
+// هذه الحدود محلية داخل نسخة الخادم الحالية.
+// Gemini نفسها تفرض حدود المشروع الفعلية التي قد تختلف حسب الـtier.
 function isModelNearCap(
   model: string,
   cap: number
@@ -1825,6 +1841,8 @@ function detectIntent(
 const SESSION_ACTIVE_WINDOW_MS =
   30 * 60 * 1000;
 
+const MAX_SAVED_CONVERSATION_MESSAGES = 40;
+
 async function loadRecentConversation(
   app: FastifyInstance,
   userId: string
@@ -1871,10 +1889,8 @@ async function loadRecentConversation(
 async function saveConversationTurn(
   app: FastifyInstance,
   userId: string,
-  updatedMessages: Array<{
-    role: string;
-    text: string;
-  }>
+  userText: string,
+  assistantText: string
 ) {
   try {
     const recent =
@@ -1882,6 +1898,25 @@ async function saveConversationTurn(
         app,
         userId
       );
+
+    const existingMessages =
+      Array.isArray(
+        (recent as any)?.messages
+      )
+        ? (recent as any).messages
+        : [];
+
+    const updatedMessages = [
+      ...existingMessages,
+      {
+        role: "user",
+        text: userText,
+      },
+      {
+        role: "assistant",
+        text: assistantText,
+      },
+    ].slice(-MAX_SAVED_CONVERSATION_MESSAGES);
 
     if (recent) {
       await app.prisma.aiConversation.update({
@@ -1912,10 +1947,6 @@ async function saveConversationTurn(
     );
   }
 }
-
-// =========================================================
-// 🚀 Routes
-// =========================================================
 
 export async function aiRoutes(
   app: FastifyInstance
@@ -2236,29 +2267,6 @@ export async function aiRoutes(
       }
 
       // =====================================================
-      // RATE LIMIT
-      // =====================================================
-
-      const rate =
-        checkRateLimit(
-          userId
-        );
-
-      if (
-        !rate.allowed
-      ) {
-        return reply
-          .status(429)
-          .send({
-            success:
-              false,
-
-            message:
-              "لقد استخدمت الحد الأقصى من الأسئلة لهذه الساعة. حاول مجدداً بعد قليل.",
-          });
-      }
-
-      // =====================================================
       // ⚡ ابدأ القراءات المستقلة فوراً بالتوازي
       //
       // نطلقها الآن بدل ما ننتظر بناء الرسالة (contents)،
@@ -2288,6 +2296,20 @@ export async function aiRoutes(
       const statsPromise =
         getPlatformStats(
           app
+        );
+
+      const serverConversationPromise =
+        loadRecentConversation(
+          app,
+          userId
+        ).catch(
+          (error) => {
+            console.error(
+              "AI conversation load error:",
+              error
+            );
+            return null;
+          }
         );
 
       // =====================================================
@@ -2353,6 +2375,78 @@ export async function aiRoutes(
           };
         };
 
+      const requestedQuestion =
+        String(
+          body?.question ||
+            body?.currentQuestion?.question ||
+            ""
+        ).trim();
+
+      if (!requestedQuestion) {
+        return reply
+          .status(400)
+          .send({
+            success: false,
+            message:
+              "يرجى كتابة سؤال أولاً.",
+          });
+      }
+
+      if (requestedQuestion.length > 12000) {
+        return reply
+          .status(400)
+          .send({
+            success: false,
+            message:
+              "السؤال أو قطعة الاستيعاب طويلة جداً. الحد الأقصى 12000 حرف.",
+          });
+      }
+
+      if (
+        body?.currentQuestion &&
+        (
+          !Array.isArray(body.currentQuestion.options) ||
+          body.currentQuestion.options.length < 2 ||
+          !Number.isInteger(
+            body.currentQuestion.correctIndex
+          ) ||
+          body.currentQuestion.correctIndex < 0 ||
+          body.currentQuestion.correctIndex >=
+            body.currentQuestion.options.length
+        )
+      ) {
+        return reply
+          .status(400)
+          .send({
+            success: false,
+            message:
+              "بيانات السؤال الحالي غير صالحة.",
+          });
+      }
+
+      // =====================================================
+      // RATE LIMIT
+      // =====================================================
+
+      const rate =
+        checkRateLimit(
+          userId
+        );
+
+      if (!rate.allowed) {
+        return reply
+          .status(429)
+          .header(
+            "Retry-After",
+            "60"
+          )
+          .send({
+            success: false,
+            message:
+              "لقد استخدمت الحد الأقصى من الأسئلة لهذه الساعة. حاول مجدداً بعد قليل.",
+          });
+      }
+
       const contents: Array<{
         role:
           string;
@@ -2367,49 +2461,60 @@ export async function aiRoutes(
       // HISTORY
       // =====================================================
 
-      if (
+      const storedConversation =
+        await serverConversationPromise;
+
+      const serverHistory =
         Array.isArray(
-          body?.history
+          (storedConversation as any)?.messages
         )
+          ? (storedConversation as any).messages
+          : [];
+
+      const sourceHistory =
+        serverHistory.length > 0
+          ? serverHistory
+          : Array.isArray(body?.history)
+            ? body.history
+            : [];
+
+      const recentHistory =
+        sourceHistory.slice(-8);
+
+      for (
+        const message of
+          recentHistory
       ) {
-        const recent =
-          body.history.slice(
-            -8
-          );
+        const role =
+          message?.role ===
+          "assistant"
+            ? "model"
+            : "user";
 
-        for (
-          const message of
-            recent
-        ) {
-          const role =
-            message.role ===
-            "assistant"
-              ? "model"
-              : "user";
-
-          const text =
-            String(
-              message.text ||
-                ""
-            ).slice(
+        const text =
+          String(
+            message?.text ||
+              ""
+          )
+            .trim()
+            .slice(
               0,
               1500
             );
 
-          if (!text) {
-            continue;
-          }
-
-          contents.push({
-            role,
-
-            parts: [
-              {
-                text,
-              },
-            ],
-          });
+        if (!text) {
+          continue;
         }
+
+        contents.push({
+          role,
+
+          parts: [
+            {
+              text,
+            },
+          ],
+        });
       }
 
       let currentCategory:
@@ -3353,16 +3458,35 @@ const payload = {
             12000
         );
 
+      const STREAM_IDLE_TIMEOUT_MS =
+        Number(
+          process.env
+            .GEMINI_STREAM_IDLE_TIMEOUT_MS ||
+            20000
+        );
+
       let fullAssistantText =
         "";
+
+      const outgoingPassage =
+        cq
+          ? String(
+              cq.passage ||
+                cq.context ||
+                cq.passageText ||
+                cq.readingPassage ||
+                cq.paragraph ||
+                ""
+            ).trim()
+          : "";
 
       const outgoingUserText =
         cq?.question
           ? [
               `السؤال: ${cq.question}`,
 
-              cq.passage
-                ? `قطعة الاستيعاب:\n${cq.passage}`
+              outgoingPassage
+                ? `قطعة الاستيعاب:\n${outgoingPassage}`
                 : "",
             ]
               .filter(
@@ -3371,10 +3495,7 @@ const payload = {
               .join(
                 "\n\n"
               )
-          : (
-              body?.question ||
-              ""
-            ).trim();
+          : requestedQuestion;
 
       // =====================================================
       // 🔄 REQUEST + FAILOVER
@@ -3382,6 +3503,32 @@ const payload = {
 
       let chosen =
         candidates[0];
+
+      let activeController:
+        AbortController | null =
+        null;
+
+      let streamIdleTimer:
+        ReturnType<typeof setTimeout> |
+        null =
+        null;
+
+      const abortActiveRequest =
+        () => {
+          activeController?.abort();
+
+          if (streamIdleTimer) {
+            clearTimeout(
+              streamIdleTimer
+            );
+            streamIdleTimer = null;
+          }
+        };
+
+      request.raw.once(
+        "close",
+        abortActiveRequest
+      );
 
       try {
         let upstream:
@@ -3465,6 +3612,9 @@ const payload = {
               chosen =
                 candidate;
 
+              activeController =
+                controller;
+
               break;
             }
 
@@ -3498,6 +3648,8 @@ const payload = {
             */
 
             if (
+              response.status ===
+                408 ||
               response.status ===
                 429 ||
               response.status ===
@@ -3629,6 +3781,12 @@ const payload = {
           }
         );
 
+        // Heartbeat يساعد بعض الـproxies على إبقاء اتصال SSE مفتوحاً
+        // ودفع أول بايتات الاستجابة للواجهة بسرعة.
+        reply.raw.write(
+          `: connected\\n\\n`
+        );
+
         const reader =
           upstream.body?.getReader();
 
@@ -3648,11 +3806,32 @@ const payload = {
           false;
 
         while (true) {
+          if (streamIdleTimer) {
+            clearTimeout(
+              streamIdleTimer
+            );
+          }
+
+          streamIdleTimer =
+            setTimeout(
+              () => {
+                activeController?.abort();
+              },
+              STREAM_IDLE_TIMEOUT_MS
+            );
+
           const {
             done,
             value,
           } =
             await reader.read();
+
+          if (streamIdleTimer) {
+            clearTimeout(
+              streamIdleTimer
+            );
+            streamIdleTimer = null;
+          }
 
           if (done) {
             break;
@@ -3760,6 +3939,13 @@ const payload = {
               */
             }
           }
+        }
+
+        if (streamIdleTimer) {
+          clearTimeout(
+            streamIdleTimer
+          );
+          streamIdleTimer = null;
         }
 
         // ===================================================
@@ -3900,6 +4086,18 @@ const payload = {
           // تجاهل
         }
       } finally {
+        if (streamIdleTimer) {
+          clearTimeout(
+            streamIdleTimer
+          );
+          streamIdleTimer = null;
+        }
+
+        request.raw.removeListener(
+          "close",
+          abortActiveRequest
+        );
+
         if (
           !reply.raw.writableEnded
         ) {
@@ -3914,41 +4112,17 @@ const payload = {
           outgoingUserText &&
           fullAssistantText
         ) {
-          const priorHistory =
-            Array.isArray(
-              body?.history
-            )
-              ? body.history
-              : [];
-
-          const updated = [
-            ...priorHistory,
-
-            {
-              role:
-                "user",
-
-              text:
-                outgoingUserText,
-            },
-
-            {
-              role:
-                "assistant",
-
-              text:
-                fullAssistantText,
-            },
-          ];
-
           /*
-            الحفظ لا يعطل استجابة الطالب.
+            الحفظ لا يعطل استجابة الطالب،
+            ويعتمد على السجل الموجود في الخادم
+            بدلاً من إعادة بناء المحادثة من history القادم من الواجهة.
           */
 
           saveConversationTurn(
             app,
             userId,
-            updated
+            outgoingUserText,
+            fullAssistantText
           ).catch(
             () => {}
           );
