@@ -19,7 +19,6 @@ const getApiUrl = () => {
   if (typeof window !== "undefined") {
     const hostname = window.location.hostname;
 
-    // تشغيل محلي
     if (
       hostname === "localhost" ||
       hostname === "127.0.0.1"
@@ -27,7 +26,6 @@ const getApiUrl = () => {
       return "http://localhost:3000";
     }
 
-    // أي نسخة منشورة
     return "https://qdra-1.onrender.com";
   }
 
@@ -52,7 +50,7 @@ interface HistoryMessage {
 }
 
 /* =========================================================
-   🎓 سياق السؤال المرسل للمعلم الذكي
+   🎓 سياق السؤال
    ========================================================= */
 
 export interface AiQuestionContext {
@@ -60,8 +58,6 @@ export interface AiQuestionContext {
   options: string[];
   correctIndex: number;
   category?: string;
-
-  // ⭐ مهم جدًا لاستيعاب المقروء
   passage?: string;
 }
 
@@ -75,23 +71,28 @@ const QUICK_ACTIONS: {
 }[] = [
   {
     label: "ما فهمت",
-    prompt: "ما فهمت الشرح، اشرحه لي بطريقة أبسط وبأسلوب مختلف تمامًا، ولا تكرر نفس طريقة الشرح السابقة.",
+    prompt:
+      "ما فهمت الشرح، اشرحه لي بطريقة أبسط وبأسلوب مختلف تمامًا، ولا تكرر نفس طريقة الشرح السابقة.",
   },
   {
     label: "اشرح أبسط",
-    prompt: "اشرح لي الفكرة من الصفر وبأبسط كلمات ممكنة، وكأني أتعلمها لأول مرة.",
+    prompt:
+      "اشرح لي الفكرة من الصفر وبأبسط كلمات ممكنة، وكأني أتعلمها لأول مرة.",
   },
   {
     label: "أعطني مثال",
-    prompt: "أعطني مثالًا جديدًا وبسيطًا يوضح نفس الفكرة، ثم وضح لي كيف يرتبط المثال بالسؤال.",
+    prompt:
+      "أعطني مثالًا جديدًا وبسيطًا يوضح نفس الفكرة، ثم وضح لي كيف يرتبط المثال بالسؤال.",
   },
   {
     label: "اختبرني",
-    prompt: "اختبرني بسؤال تدريبي جديد على نفس المهارة، ولا تعطيني الإجابة مباشرة.",
+    prompt:
+      "اختبرني بسؤال تدريبي جديد على نفس المهارة، ولا تعطيني الإجابة مباشرة.",
   },
   {
     label: "سؤال مشابه",
-    prompt: "أعطني سؤالًا مشابهًا لهذا السؤال للتدريب، مع خيارات، ثم انتظر إجابتي قبل شرح الحل.",
+    prompt:
+      "أعطني سؤالًا مشابهًا لهذا السؤال للتدريب، مع خيارات، ثم انتظر إجابتي قبل شرح الحل.",
   },
 ];
 
@@ -110,15 +111,13 @@ export default function AiChatWidget() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // ⭐ الاحتفاظ بأحدث الرسائل دائمًا
   const messagesRef = useRef<Message[]>([]);
 
-  // ⭐ التحكم في الطلب الحالي
   const abortControllerRef =
     useRef<AbortController | null>(null);
 
   /* =========================================================
-     🔄 مزامنة الرسائل مع الـ Ref
+     🔄 مزامنة الرسائل
      ========================================================= */
 
   useEffect(() => {
@@ -137,7 +136,7 @@ export default function AiChatWidget() {
   }, []);
 
   /* =========================================================
-     📥 استرجاع آخر جلسة من الخادم
+     📥 استرجاع آخر جلسة
      ========================================================= */
 
   const restoreHistory = useCallback(async () => {
@@ -177,11 +176,14 @@ export default function AiChatWidget() {
                 typeof message === "object" &&
                 "role" in message &&
                 "text" in message &&
-                ((message as Message).role ===
-                  "user" ||
+                (
                   (message as Message).role ===
-                    "assistant") &&
-                typeof (message as Message).text ===
+                    "user" ||
+                  (message as Message).role ===
+                    "assistant"
+                ) &&
+                typeof
+                  (message as Message).text ===
                   "string"
             )
             .map((message: Message) => ({
@@ -212,7 +214,7 @@ export default function AiChatWidget() {
   }, []);
 
   /* =========================================================
-     👋 الترحيب عند أول فتح
+     👋 تهيئة المحادثة
      ========================================================= */
 
   useEffect(() => {
@@ -262,7 +264,7 @@ export default function AiChatWidget() {
   ]);
 
   /* =========================================================
-     📡 الطلب الموحد للمعلم الذكي
+     📡 الطلب الموحد
      ========================================================= */
 
   const performStreamingRequest =
@@ -282,7 +284,6 @@ export default function AiChatWidget() {
         setLoading(true);
         setError(null);
 
-        // ⭐ إلغاء أي طلب سابق احتياطيًا
         abortControllerRef.current?.abort();
 
         const controller =
@@ -291,11 +292,10 @@ export default function AiChatWidget() {
         abortControllerRef.current =
           controller;
 
-        const assistantPlaceholder: Message =
-          {
-            role: "assistant",
-            text: "",
-          };
+        const assistantPlaceholder: Message = {
+          role: "assistant",
+          text: "",
+        };
 
         const messagesWithPlaceholder: Message[] =
           [
@@ -315,24 +315,32 @@ export default function AiChatWidget() {
             `${API_URL}/api/ai/ask`,
             {
               method: "POST",
+
               headers: {
                 "Content-Type":
                   "application/json",
+
                 ...(token
                   ? {
-                      Authorization: `Bearer ${token}`,
+                      Authorization:
+                        `Bearer ${token}`,
                     }
                   : {}),
               },
+
               credentials: "include",
+
               signal: controller.signal,
 
-              body: JSON.stringify(payload),
+              body:
+                JSON.stringify(
+                  payload
+                ),
             }
           );
 
           /* =====================================================
-             🚦 تحديد الأخطاء قبل قراءة البث
+             🚦 أخطاء HTTP
              ===================================================== */
 
           if (res.status === 401) {
@@ -380,77 +388,104 @@ export default function AiChatWidget() {
             );
           }
 
-          const decoder = new TextDecoder(
-            "utf-8"
-          );
+          const decoder =
+            new TextDecoder(
+              "utf-8"
+            );
 
           let buffer = "";
           let fullAssistantText = "";
           let streamFinished = false;
 
           /* =====================================================
-             🧩 معالجة رسالة SSE
+             🧩 معالجة سطر SSE
              ===================================================== */
 
           const processLine = (
             line: string
           ) => {
-            const trimmed = line.trim();
+            const trimmed =
+              line.trim();
 
             if (!trimmed) {
               return;
             }
 
-            if (!trimmed.startsWith("data:")) {
+            if (
+              !trimmed.startsWith(
+                "data:"
+              )
+            ) {
               return;
             }
 
-            const jsonStr = trimmed
-              .slice(5)
-              .trim();
+            const jsonStr =
+              trimmed
+                .slice(5)
+                .trim();
 
-            if (!jsonStr) {
+            if (
+              !jsonStr ||
+              jsonStr === "[DONE]"
+            ) {
               return;
             }
 
             try {
-              const parsed = JSON.parse(
-                jsonStr
-              );
-
-              if (parsed.error) {
-                setError(
-                  String(parsed.error)
+              const parsed =
+                JSON.parse(
+                  jsonStr
                 );
-                return;
+
+              if (
+                parsed.error
+              ) {
+                throw new Error(
+                  String(
+                    parsed.error
+                  )
+                );
               }
 
-              if (parsed.done) {
-                streamFinished = true;
+              if (
+                parsed.done
+              ) {
+                streamFinished =
+                  true;
+
                 return;
               }
 
               if (
-                typeof parsed.piece ===
-                "string"
+                typeof
+                  parsed.piece ===
+                  "string"
               ) {
                 fullAssistantText +=
                   parsed.piece;
 
                 setMessages((prev) => {
-                  const updated = [...prev];
+                  const updated = [
+                    ...prev,
+                  ];
+
+                  const lastIndex =
+                    updated.length - 1;
 
                   if (
-                    updated.length > 0 &&
+                    lastIndex >= 0 &&
                     updated[
-                      updated.length - 1
-                    ].role === "assistant"
+                      lastIndex
+                    ].role ===
+                      "assistant"
                   ) {
                     updated[
-                      updated.length - 1
+                      lastIndex
                     ] = {
-                      role: "assistant",
-                      text: fullAssistantText,
+                      role:
+                        "assistant",
+                      text:
+                        fullAssistantText,
                     };
                   }
 
@@ -460,8 +495,14 @@ export default function AiChatWidget() {
                   return updated;
                 });
               }
-            } catch {
-              // تجاهل JSON غير المكتمل
+            } catch (err) {
+              if (
+                err instanceof Error
+              ) {
+                throw err;
+              }
+
+              // تجاهل JSON غير الصالح
             }
           };
 
@@ -477,50 +518,79 @@ export default function AiChatWidget() {
               break;
             }
 
-            buffer += decoder.decode(
-              value,
-              {
-                stream: true,
-              }
-            );
+            buffer +=
+              decoder.decode(
+                value,
+                {
+                  stream: true,
+                }
+              );
 
             const lines =
-              buffer.split("\n");
+              buffer.split(
+                /\r?\n/
+              );
 
-            // ⭐ الاحتفاظ بالسطر الأخير
-            // إذا كان غير مكتمل
             buffer =
               lines.pop() || "";
 
-            for (const line of lines) {
+            for (
+              const line of
+                lines
+            ) {
               processLine(line);
             }
           }
 
           /* =====================================================
-             🧹 معالجة آخر جزء من البث
+             🧹 آخر جزء
              ===================================================== */
 
-          buffer += decoder.decode();
+          buffer +=
+            decoder.decode();
 
           if (buffer.trim()) {
-            processLine(buffer);
+            const finalLines =
+              buffer.split(
+                /\r?\n/
+              );
+
+            for (
+              const line of
+                finalLines
+            ) {
+              if (
+                line.trim()
+              ) {
+                processLine(line);
+              }
+            }
           }
 
           /* =====================================================
-             ⚠️ الباك إند أنهى الاتصال بدون نص
+             ✅ التأكد من اكتمال الإجابة
              ===================================================== */
 
           if (
-            !streamFinished &&
             !fullAssistantText.trim()
           ) {
             throw new Error(
               "لم تصل إجابة من المعلم. حاول مرة أخرى."
             );
           }
+
+          /*
+            لا نعتبر انتهاء اتصال HTTP وحده
+            دليلاً على نجاح البث.
+            النجاح الحقيقي يكون عند وجود نص.
+          */
+
+          if (!streamFinished) {
+            console.warn(
+              "AI stream closed without explicit done event."
+            );
+          }
         } catch (err: unknown) {
-          // ⭐ إلغاء الطلب ليس خطأ للمستخدم
           if (
             err instanceof DOMException &&
             err.name === "AbortError"
@@ -539,7 +609,6 @@ export default function AiChatWidget() {
             const last =
               prev[prev.length - 1];
 
-            // حذف فقاعة المعلم الفارغة
             if (
               last?.role === "assistant" &&
               !last.text
@@ -571,12 +640,15 @@ export default function AiChatWidget() {
     );
 
   /* =========================================================
-     🎓 فتح المعلم وشرح سؤال محدد
+     🎓 سؤال من الصفحة
      ========================================================= */
 
   const askWithContext = useCallback(
     (ctx: AiQuestionContext) => {
-      if (loading || !ctx?.question) {
+      if (
+        loading ||
+        !ctx?.question
+      ) {
         return;
       }
 
@@ -585,22 +657,18 @@ export default function AiChatWidget() {
       setInput("");
       setError(null);
 
-      // ⭐ نأخذ آخر نسخة حقيقية من الرسائل
       const currentMessages =
         messagesRef.current;
-
-      const userText =
-        `📌 السؤال: ${ctx.question}`;
 
       const newMessages: Message[] = [
         ...currentMessages,
         {
           role: "user",
-          text: userText,
+          text:
+            `📌 السؤال: ${ctx.question}`,
         },
       ];
 
-      // ⭐ تحديث الواجهة فورًا
       messagesRef.current =
         newMessages;
 
@@ -629,7 +697,7 @@ export default function AiChatWidget() {
   );
 
   /* =========================================================
-     📥 استقبال سؤال من QuestionView
+     📥 استقبال الحدث
      ========================================================= */
 
   useEffect(() => {
@@ -637,7 +705,8 @@ export default function AiChatWidget() {
       const customEvent =
         e as CustomEvent<AiQuestionContext>;
 
-      const ctx = customEvent.detail;
+      const ctx =
+        customEvent.detail;
 
       if (
         ctx &&
@@ -663,7 +732,7 @@ export default function AiChatWidget() {
   }, [askWithContext]);
 
   /* =========================================================
-     ⬇️ تمرير الشات لأسفل تلقائيًا
+     ⬇️ التمرير التلقائي
      ========================================================= */
 
   useEffect(() => {
@@ -674,21 +743,31 @@ export default function AiChatWidget() {
       return;
     }
 
-    element.scrollTop =
-      element.scrollHeight;
-  }, [messages, loading]);
+    requestAnimationFrame(() => {
+      element.scrollTop =
+        element.scrollHeight;
+    });
+  }, [
+    messages,
+    loading,
+  ]);
 
   /* =========================================================
-     ✉️ إرسال رسالة عادية
+     ✉️ إرسال رسالة
      ========================================================= */
 
   const send = useCallback(
-    async (overrideText?: string) => {
+    async (
+      overrideText?: string
+    ) => {
       const question = (
         overrideText ?? input
       ).trim();
 
-      if (!question || loading) {
+      if (
+        !question ||
+        loading
+      ) {
         return;
       }
 
@@ -708,6 +787,8 @@ export default function AiChatWidget() {
 
       messagesRef.current =
         newMessages;
+
+      setMessages(newMessages);
 
       const history: HistoryMessage[] =
         newMessages
@@ -733,7 +814,7 @@ export default function AiChatWidget() {
   );
 
   /* =========================================================
-     👍👎 تقييم رد المعلم
+     👍👎 التقييم
      ========================================================= */
 
   const sendFeedback = useCallback(
@@ -741,14 +822,17 @@ export default function AiChatWidget() {
       index: number,
       rating: "up" | "down"
     ) => {
-      // ⭐ تحديث الواجهة فورًا
       setMessages((prev) => {
-        const updated = [...prev];
+        const updated =
+          [...prev];
 
-        if (updated[index]) {
+        if (
+          updated[index]
+        ) {
           updated[index] = {
             ...updated[index],
-            feedback: rating,
+            feedback:
+              rating,
           };
         }
 
@@ -759,26 +843,35 @@ export default function AiChatWidget() {
       });
 
       try {
-        const token = getStoredToken();
+        const token =
+          getStoredToken();
 
         await fetch(
           `${API_URL}/api/ai/feedback`,
           {
             method: "POST",
+
             headers: {
               "Content-Type":
                 "application/json",
+
               ...(token
                 ? {
-                    Authorization: `Bearer ${token}`,
+                    Authorization:
+                      `Bearer ${token}`,
                   }
                 : {}),
             },
-            credentials: "include",
-            body: JSON.stringify({
-              messageIndex: index,
-              rating,
-            }),
+
+            credentials:
+              "include",
+
+            body:
+              JSON.stringify({
+                messageIndex:
+                  index,
+                rating,
+              }),
           }
         );
       } catch {
@@ -794,9 +887,7 @@ export default function AiChatWidget() {
 
   return (
     <>
-      {/* =====================================================
-          زر فتح المعلم
-      ===================================================== */}
+      {/* زر فتح المعلم */}
 
       <button
         type="button"
@@ -814,22 +905,19 @@ export default function AiChatWidget() {
       >
         <Bot size={26} />
 
-        {unread && !open && (
-          <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-black text-white">
-            1
-          </span>
-        )}
+        {unread &&
+          !open && (
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-black text-white">
+              1
+            </span>
+          )}
       </button>
 
-      {/* =====================================================
-          نافذة المعلم
-      ===================================================== */}
+      {/* نافذة المعلم */}
 
       {open && (
         <div className="fixed inset-0 z-[60] flex flex-col bg-ink-950/95 backdrop-blur-sm sm:inset-auto sm:bottom-6 sm:left-6 sm:h-[600px] sm:max-h-[80vh] sm:w-[380px] sm:rounded-3xl sm:border sm:border-white/10 sm:shadow-2xl">
-          {/* =================================================
-              Header
-          ================================================= */}
+          {/* Header */}
 
           <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-l from-gold-500/20 to-transparent px-4 py-3">
             <div className="flex items-center gap-3">
@@ -861,20 +949,19 @@ export default function AiChatWidget() {
             </button>
           </div>
 
-          {/* =================================================
-              Messages
-          ================================================= */}
+          {/* Messages */}
 
           <div
             ref={scrollRef}
             className="flex-1 space-y-3 overflow-y-auto p-4"
           >
-            {messages.map((m, i) => {
-              return (
+            {messages.map(
+              (m, i) => (
                 <div
                   key={`${i}-${m.role}`}
                   className={cn(
-                    m.role === "user"
+                    m.role ===
+                      "user"
                       ? "mr-auto max-w-[85%]"
                       : "ml-auto max-w-[85%]"
                   )}
@@ -883,7 +970,8 @@ export default function AiChatWidget() {
                     <div
                       className={cn(
                         "whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed",
-                        m.role === "user"
+                        m.role ===
+                          "user"
                           ? "rounded-tr-sm bg-gold-500 text-black"
                           : "rounded-tl-sm border border-white/10 bg-white/5 text-ink-100"
                       )}
@@ -892,8 +980,8 @@ export default function AiChatWidget() {
                     </div>
                   )}
 
-                  {/* ⭐ تقييم ردود المعلم */}
-                  {m.role === "assistant" &&
+                  {m.role ===
+                    "assistant" &&
                     m.text &&
                     i > 0 && (
                       <div className="mt-1 flex items-center gap-1.5">
@@ -939,20 +1027,20 @@ export default function AiChatWidget() {
                       </div>
                     )}
                 </div>
-              );
-            })}
-
-            {/* =================================================
-                مؤشر التفكير
-            ================================================= */}
+              )
+            )}
 
             {loading &&
               messages[
-                messages.length - 1
-              ]?.role === "assistant" &&
+                messages.length -
+                  1
+              ]?.role ===
+                "assistant" &&
               messages[
-                messages.length - 1
-              ]?.text === "" && (
+                messages.length -
+                  1
+              ]?.text ===
+                "" && (
                 <div className="ml-auto flex items-center gap-2 rounded-2xl rounded-tl-sm border border-white/10 bg-white/5 px-3.5 py-2.5 text-xs text-ink-300">
                   <Loader2
                     size={14}
@@ -963,31 +1051,36 @@ export default function AiChatWidget() {
               )}
           </div>
 
-          {/* =================================================
-              Quick actions
-          ================================================= */}
+          {/* Quick actions */}
 
-          {messages.length > 1 &&
+          {messages.length >
+            1 &&
             !loading && (
               <div className="flex flex-wrap gap-1.5 px-3 pb-1.5">
-                {QUICK_ACTIONS.map((action) => (
-                  <button
-                    key={action.label}
-                    type="button"
-                    onClick={() =>
-                      send(action.prompt)
-                    }
-                    className="press rounded-full border border-gold-500/30 bg-gold-500/10 px-2.5 py-1 text-[10px] font-bold text-gold-300 transition hover:bg-gold-500/20"
-                  >
-                    {action.label}
-                  </button>
-                ))}
+                {QUICK_ACTIONS.map(
+                  (action) => (
+                    <button
+                      key={
+                        action.label
+                      }
+                      type="button"
+                      onClick={() =>
+                        send(
+                          action.prompt
+                        )
+                      }
+                      className="press rounded-full border border-gold-500/30 bg-gold-500/10 px-2.5 py-1 text-[10px] font-bold text-gold-300 transition hover:bg-gold-500/20"
+                    >
+                      {
+                        action.label
+                      }
+                    </button>
+                  )
+                )}
               </div>
             )}
 
-          {/* =================================================
-              Error
-          ================================================= */}
+          {/* Error */}
 
           {error && (
             <div className="mx-4 mb-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300">
@@ -995,9 +1088,7 @@ export default function AiChatWidget() {
             </div>
           )}
 
-          {/* =================================================
-              Input
-          ================================================= */}
+          {/* Input */}
 
           <div className="border-t border-white/10 p-3">
             <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 p-1.5 focus-within:border-gold-500/40">
@@ -1005,11 +1096,14 @@ export default function AiChatWidget() {
                 type="text"
                 value={input}
                 onChange={(e) =>
-                  setInput(e.target.value)
+                  setInput(
+                    e.target.value
+                  )
                 }
                 onKeyDown={(e) => {
                   if (
-                    e.key === "Enter" &&
+                    e.key ===
+                      "Enter" &&
                     !e.shiftKey
                   ) {
                     e.preventDefault();
@@ -1025,7 +1119,9 @@ export default function AiChatWidget() {
 
               <button
                 type="button"
-                onClick={() => send()}
+                onClick={() =>
+                  send()
+                }
                 disabled={
                   loading ||
                   !input.trim()

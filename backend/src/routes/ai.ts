@@ -42,7 +42,7 @@ import { FastifyInstance } from "fastify";
    - نفس إعداد التفكير لكل النماذج
    - low للأسئلة العادية
    - medium للأسئلة العميقة
-   - maxOutputTokens مناسب
+   - maxOutputTokens = 7000
    - timeout مستقل لكل نموذج
    - Cache لملف الطالب (90 ثانية)
    - تشغيل ملف الطالب وإحصائيات المنصة بالتوازي
@@ -147,9 +147,7 @@ interface CachedQuestionMeta {
 }
 
 interface CachedBankQuestion {
-  // ⭐ ID الحقيقي للسؤال من بنك الأسئلة
   id?: string;
-
   question: string;
   options: string[];
   correctIndex: number;
@@ -161,7 +159,7 @@ interface CachedBankQuestion {
 interface QuestionIndexCache {
   at: number;
 
-  // البحث بالنص — موجود كخطة احتياطية
+  // البحث بالنص — احتياط
   questionMeta: Map<
     string,
     CachedQuestionMeta
@@ -217,9 +215,7 @@ setInterval(
         now - cached.at >
         STUDENT_PROFILE_TTL_MS
       ) {
-        studentProfileCache.delete(
-          userId
-        );
+        studentProfileCache.delete(userId);
       }
     }
   },
@@ -296,17 +292,14 @@ setInterval(
       pacificDateKey();
 
     for (
-      const key of
-        usageCounters.keys()
+      const key of usageCounters.keys()
     ) {
       if (
         !key.startsWith(
           todayKey
         )
       ) {
-        usageCounters.delete(
-          key
-        );
+        usageCounters.delete(key);
       }
     }
   },
@@ -355,8 +348,7 @@ function checkRateLimit(
   allowed: boolean;
   remaining: number;
 } {
-  const now =
-    Date.now();
+  const now = Date.now();
 
   const timestamps =
     (
@@ -384,9 +376,7 @@ function checkRateLimit(
     };
   }
 
-  timestamps.push(
-    now
-  );
+  timestamps.push(now);
 
   rateLimitStore.set(
     userId,
@@ -403,8 +393,7 @@ function checkRateLimit(
 
 setInterval(
   () => {
-    const now =
-      Date.now();
+    const now = Date.now();
 
     for (
       const [
@@ -504,51 +493,65 @@ function matchStudentAnswer(
     message.trim();
 
   const numMatch =
-    trimmed.match(/\d+/);
+    trimmed.match(/^\s*(\d)\s*$/);
 
   if (numMatch) {
     const idx =
       parseInt(
-        numMatch[0],
+        numMatch[1],
         10
       ) - 1;
 
     if (
       idx >= 0 &&
       idx <
-        pending.options.length &&
-      trimmed.length <= 6
+        pending.options.length
     ) {
       return idx;
     }
   }
 
-  if (
-    trimmed.length <= 8
-  ) {
-    for (
-      let i = 0;
-      i <
-        ARABIC_LETTERS.length &&
-      i <
-        pending.options.length;
-      i++
+  const letterMatch =
+    trimmed.match(
+      /^\s*([أبجددهه])(?:\s*[\)\-\.])?\s*$/
+    );
+
+  if (letterMatch) {
+    const letter =
+      letterMatch[1];
+
+    const map: Record<
+      string,
+      number
+    > = {
+      "أ": 0,
+      "ب": 1,
+      "ج": 2,
+      "د": 3,
+      "ه": 4,
+      "هـ": 4,
+      "ه‍": 4,
+    };
+
+    const idx =
+      map[letter];
+
+    if (
+      typeof idx === "number" &&
+      idx >= 0 &&
+      idx <
+        pending.options.length
     ) {
-      if (
-        trimmed.includes(
-          ARABIC_LETTERS[i]
-        )
-      ) {
-        return i;
-      }
+      return idx;
     }
   }
 
   const normalized =
-    trimmed.replace(
-      /[\s\u064B-\u065F]/g,
-      ""
-    );
+    trimmed
+      .replace(
+        /[\s\u064B-\u065F]/g,
+        ""
+      );
 
   for (
     let i = 0;
@@ -557,7 +560,9 @@ function matchStudentAnswer(
     i++
   ) {
     const opt =
-      pending.options[i].replace(
+      String(
+        pending.options[i] || ""
+      ).replace(
         /[\s\u064B-\u065F]/g,
         ""
       );
@@ -565,12 +570,7 @@ function matchStudentAnswer(
     if (
       opt &&
       normalized &&
-      (
-        normalized === opt ||
-        normalized.includes(
-          opt
-        )
-      )
+      normalized === opt
     ) {
       return i;
     }
@@ -1149,8 +1149,7 @@ async function refreshQuestionIndex(
         const sections =
           await app.prisma.section.findMany({
             where: {
-              isActive:
-                true,
+              isActive: true,
             },
 
             select: {
@@ -1168,7 +1167,6 @@ async function refreshQuestionIndex(
             CachedQuestionMeta
           >();
 
-        // ⭐ الفهرس الجديد المباشر بالـID
         const questionById =
           new Map<
             string,
@@ -1277,7 +1275,6 @@ async function refreshQuestionIndex(
                 passage,
               };
 
-            // البحث بالنص — احتياط
             questionMeta.set(
               text,
               meta
@@ -1304,8 +1301,6 @@ async function refreshQuestionIndex(
                 passage,
               };
 
-            // ⭐ أهم إضافة:
-            // حفظ السؤال باستخدام question.id
             if (id) {
               questionById.set(
                 id,
@@ -1374,7 +1369,6 @@ function getCachedQuestionMeta(
   );
 }
 
-// ⭐ البحث المباشر بالـ question.id
 function getCachedQuestionById(
   questionId: string
 ): CachedBankQuestion | undefined {
@@ -1499,18 +1493,13 @@ async function buildStudentProfile(
         attempt.questionId
       ).trim();
 
-    // =====================================================
-    // ⭐ الإصلاح الأساسي
-    //
-    // أولاً: ابحث بالـID الحقيقي للسؤال.
-    // ثانياً: إذا لم يوجد، جرب النص كخطة احتياطية.
-    // =====================================================
-
+    // ⭐ أولوية البحث بالـID الحقيقي
     const cachedQuestion =
       getCachedQuestionById(
         questionId
       );
 
+    // ⭐ fallback للنص
     const meta =
       cachedQuestion
         ? {
@@ -1518,6 +1507,7 @@ async function buildStudentProfile(
               normalizeCategory(
                 cachedQuestion.category
               ),
+
             passage:
               String(
                 cachedQuestion.passage ||
@@ -2038,10 +2028,6 @@ async function saveConversationTurn(
 export async function aiRoutes(
   app: FastifyInstance
 ) {
-  // =======================================================
-  // ⚡ بناء الـCache في الخلفية
-  // =======================================================
-
   refreshQuestionIndex(
     app
   ).catch(
@@ -2774,6 +2760,7 @@ export async function aiRoutes(
               currentCategory ||
               "غير محدد"
             }:`,
+
             "",
 
             passage
@@ -2872,21 +2859,6 @@ export async function aiRoutes(
 
               message:
                 "يرجى كتابة سؤال أولاً.",
-            });
-        }
-
-        if (
-          question.length >
-          12000
-        ) {
-          return reply
-            .status(400)
-            .send({
-              success:
-                false,
-
-              message:
-                "السؤال أو قطعة الاستيعاب طويلة جداً. الحد الأقصى 12000 حرف.",
             });
         }
 
@@ -3126,6 +3098,7 @@ export async function aiRoutes(
                       )}`,
 
                     "",
+
                     "تعليمات:",
                     "- اعرض السؤال كما هو.",
                     "- اعرض الخيارات كما هي.",
@@ -3454,9 +3427,10 @@ ${internalProfile.weaknesses.join(
           useDeepReasoning
         );
 
+      // ⭐ الحد الأقصى للإخراج = 7000
       const generationConfig = {
         maxOutputTokens:
-          8192,
+          7000,
 
         thinkingConfig: {
           thinkingLevel,
@@ -3561,11 +3535,12 @@ ${internalProfile.weaknesses.join(
             12000
         );
 
+      // ⭐ رفعنا مهلة خمول الـStreaming إلى 60 ثانية
       const STREAM_IDLE_TIMEOUT_MS =
         Number(
           process.env
             .GEMINI_STREAM_IDLE_TIMEOUT_MS ||
-            20000
+            60000
         );
 
       let fullAssistantText =
@@ -3616,20 +3591,27 @@ ${internalProfile.weaknesses.join(
         null =
         null;
 
+      // ⭐ إلغاء آمن عند إغلاق استجابة العميل
       const abortActiveRequest =
         () => {
-          activeController?.abort();
+          if (
+            !reply.raw.writableEnded
+          ) {
+            activeController?.abort();
+          }
 
           if (streamIdleTimer) {
             clearTimeout(
               streamIdleTimer
             );
 
-            streamIdleTimer = null;
+            streamIdleTimer =
+              null;
           }
         };
 
-      request.raw.once(
+      // ⭐ مهم: الاستماع على response وليس request
+      reply.raw.once(
         "close",
         abortActiveRequest
       );
@@ -3868,8 +3850,9 @@ ${internalProfile.weaknesses.join(
           }
         );
 
+        // ⭐ Newline حقيقي حسب SSE
         reply.raw.write(
-          `: connected\n\n`
+          ": connected\n\n"
         );
 
         const reader =
@@ -3916,7 +3899,8 @@ ${internalProfile.weaknesses.join(
               streamIdleTimer
             );
 
-            streamIdleTimer = null;
+            streamIdleTimer =
+              null;
           }
 
           if (done) {
@@ -4029,79 +4013,99 @@ ${internalProfile.weaknesses.join(
             streamIdleTimer
           );
 
-          streamIdleTimer = null;
+          streamIdleTimer =
+            null;
         }
 
         // ===================================================
         // آخر Buffer
         // ===================================================
 
-        const lastLine =
-          buffer.trim();
+        buffer +=
+          decoder.decode();
 
-        if (
-          lastLine.startsWith(
-            "data:"
-          )
+        const remainingLines =
+          buffer.split(
+            /\r?\n/
+          );
+
+        for (
+          const line of
+            remainingLines
         ) {
+          const trimmed =
+            line.trim();
+
+          if (
+            !trimmed.startsWith(
+              "data:"
+            )
+          ) {
+            continue;
+          }
+
           const jsonString =
-            lastLine
+            trimmed
               .slice(5)
               .trim();
 
           if (
-            jsonString &&
-            jsonString !==
+            !jsonString ||
+            jsonString ===
               "[DONE]"
           ) {
-            try {
-              const chunk =
-                JSON.parse(
-                  jsonString
-                );
+            continue;
+          }
 
-              const parts =
-                chunk
-                  ?.candidates?.[0]
-                  ?.content
-                  ?.parts;
+          try {
+            const chunk =
+              JSON.parse(
+                jsonString
+              );
+
+            const parts =
+              chunk
+                ?.candidates?.[0]
+                ?.content
+                ?.parts;
+
+            if (
+              !Array.isArray(
+                parts
+              )
+            ) {
+              continue;
+            }
+
+            for (
+              const part of
+                parts
+            ) {
+              const piece =
+                part?.text;
 
               if (
-                Array.isArray(
-                  parts
-                )
+                typeof piece ===
+                  "string" &&
+                piece
               ) {
-                for (
-                  const part of
-                    parts
-                ) {
-                  const piece =
-                    part?.text;
+                emitted =
+                  true;
 
-                  if (
-                    typeof piece ===
-                      "string" &&
-                    piece
-                  ) {
-                    emitted =
-                      true;
+                fullAssistantText +=
+                  piece;
 
-                    fullAssistantText +=
-                      piece;
-
-                    reply.raw.write(
-                      `data: ${JSON.stringify(
-                        {
-                          piece,
-                        }
-                      )}\n\n`
-                    );
-                  }
-                }
+                reply.raw.write(
+                  `data: ${JSON.stringify(
+                    {
+                      piece,
+                    }
+                  )}\n\n`
+                );
               }
-            } catch {
-              // تجاهل
             }
+          } catch {
+            // تجاهل
           }
         }
 
@@ -4144,8 +4148,7 @@ ${internalProfile.weaknesses.join(
 
         try {
           if (
-            !reply.raw
-              .headersSent
+            !reply.raw.headersSent
           ) {
             return reply
               .status(500)
@@ -4158,14 +4161,18 @@ ${internalProfile.weaknesses.join(
               });
           }
 
-          reply.raw.write(
-            `data: ${JSON.stringify(
-              {
-                error:
-                  "تعذر الاتصال بخدمة الذكاء الاصطناعي.",
-              }
-            )}\n\n`
-          );
+          if (
+            !reply.raw.writableEnded
+          ) {
+            reply.raw.write(
+              `data: ${JSON.stringify(
+                {
+                  error:
+                    "تعذر الاتصال بخدمة الذكاء الاصطناعي.",
+                }
+              )}\n\n`
+            );
+          }
         } catch {
           // تجاهل
         }
@@ -4175,10 +4182,12 @@ ${internalProfile.weaknesses.join(
             streamIdleTimer
           );
 
-          streamIdleTimer = null;
+          streamIdleTimer =
+            null;
         }
 
-        request.raw.removeListener(
+        // ⭐ مهم: إزالة listener من response
+        reply.raw.removeListener(
           "close",
           abortActiveRequest
         );
