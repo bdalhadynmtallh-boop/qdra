@@ -11,12 +11,7 @@ import { FastifyInstance } from "fastify";
    5) Gemini 3.5 Flash Lite
    6) Gemini 3.1 Flash Lite
 
-   ملاحظة:
-   حدود cap أدناه هي حدود محلية اختيارية للتطبيق، وليست
-   بديلاً عن حدود المشروع الفعلية في Gemini/AI Studio.
-
-   =========================================================
-   المميزات المحفوظة:
+   المميزات:
    - Adaptive Teaching
    - تحليل أداء الطالب الحقيقي
    - تحليل حسب category
@@ -37,9 +32,10 @@ import { FastifyInstance } from "fastify";
    - Failover تلقائي
    - Streaming
 
-   =========================================================
    تحسينات السرعة:
    - Cache لبنك الأسئلة
+   - فهرس بالـ question ID
+   - فهرس بالنص كخطة احتياطية
    - عدم قراءة sections/questions مع كل رسالة
    - عدم البحث في كل بنك الأسئلة عند كل passage
    - قراءة آخر 300 محاولة للطالب فقط
@@ -50,7 +46,6 @@ import { FastifyInstance } from "fastify";
    - timeout مستقل لكل نموذج
    - Cache لملف الطالب (90 ثانية)
    - تشغيل ملف الطالب وإحصائيات المنصة بالتوازي
-   - timeout أقصر لكل نموذج (12 ثانية بدل 30)
 ========================================================= */
 
 // =========================================================
@@ -65,7 +60,7 @@ const MODEL_35_FLASH_LITE = "gemini-3.5-flash-lite";
 const MODEL_31_FLASH_LITE = "gemini-3.1-flash-lite";
 
 // =========================================================
-// 📊 الحدود المحلية اليومية (اختيارية)
+// 📊 الحدود المحلية اليومية
 // =========================================================
 
 const MODEL_38_DAILY_CAP = Number(
@@ -144,8 +139,7 @@ const MIN_SKILL_SAMPLE = 8;
 // ⚡ Cache بنك الأسئلة
 // =========================================================
 
-const QUESTION_INDEX_TTL_MS =
-  10 * 60 * 1000;
+const QUESTION_INDEX_TTL_MS = 10 * 60 * 1000;
 
 interface CachedQuestionMeta {
   category: string;
@@ -153,6 +147,9 @@ interface CachedQuestionMeta {
 }
 
 interface CachedBankQuestion {
+  // ⭐ ID الحقيقي للسؤال من بنك الأسئلة
+  id?: string;
+
   question: string;
   options: string[];
   correctIndex: number;
@@ -164,9 +161,16 @@ interface CachedBankQuestion {
 interface QuestionIndexCache {
   at: number;
 
+  // البحث بالنص — موجود كخطة احتياطية
   questionMeta: Map<
     string,
     CachedQuestionMeta
+  >;
+
+  // ⭐ البحث المباشر بالـ question.id
+  questionById: Map<
+    string,
+    CachedBankQuestion
   >;
 
   sectionCategory: Map<
@@ -189,7 +193,7 @@ let questionIndexRefreshPromise:
 // ⚡ Cache ملف الطالب
 // =========================================================
 
-const STUDENT_PROFILE_TTL_MS = 90 * 1000; // 90 ثانية
+const STUDENT_PROFILE_TTL_MS = 90 * 1000;
 
 interface CachedStudentProfile {
   at: number;
@@ -266,8 +270,6 @@ function getUsage(
   );
 }
 
-// هذه الحدود محلية داخل نسخة الخادم الحالية.
-// Gemini نفسها تفرض حدود المشروع الفعلية التي قد تختلف حسب الـtier.
 function isModelNearCap(
   model: string,
   cap: number
@@ -313,14 +315,6 @@ setInterval(
 
 // =========================================================
 // 🧠 التفكير
-//
-// مهم:
-// جميع النماذج تستخدم نفس المستويات.
-//
-// عادي      → low
-// عميق      → medium
-//
-// لا يوجد نموذج يحصل على إعداد مختلف.
 // =========================================================
 
 const NORMAL_THINKING_LEVEL =
@@ -559,7 +553,7 @@ function matchStudentAnswer(
   for (
     let i = 0;
     i <
-      pending.options.length;
+    pending.options.length;
     i++
   ) {
     const opt =
@@ -1093,7 +1087,9 @@ async function getPlatformStats(
 
     let questions = 0;
 
-    for (const section of sections) {
+    for (
+      const section of sections
+    ) {
       if (
         Array.isArray(
           section.questions
@@ -1172,6 +1168,13 @@ async function refreshQuestionIndex(
             CachedQuestionMeta
           >();
 
+        // ⭐ الفهرس الجديد المباشر بالـID
+        const questionById =
+          new Map<
+            string,
+            CachedBankQuestion
+          >();
+
         const sectionCategory =
           new Map<
             number,
@@ -1216,10 +1219,22 @@ async function refreshQuestionIndex(
               continue;
             }
 
+            const id =
+              question.id !=
+              null
+                ? String(
+                    question.id
+                  ).trim()
+                : "";
+
             const text =
               String(
                 question.question
-              );
+              ).trim();
+
+            if (!text) {
+              continue;
+            }
 
             const category =
               normalizeCategory(
@@ -1237,38 +1252,70 @@ async function refreshQuestionIndex(
                   ""
               ).trim();
 
-            questionMeta.set(
-              text,
+            const options =
+              Array.isArray(
+                question.options
+              )
+                ? question.options.map(
+                    (option: unknown) =>
+                      String(
+                        option ?? ""
+                      )
+                  )
+                : [];
+
+            const correctIndex =
+              Number.isInteger(
+                question.correctIndex
+              )
+                ? question.correctIndex
+                : 0;
+
+            const meta: CachedQuestionMeta =
               {
                 category,
                 passage,
-              }
+              };
+
+            // البحث بالنص — احتياط
+            questionMeta.set(
+              text,
+              meta
             );
 
-            allQuestions.push({
-              question:
-                text,
+            const cachedQuestion:
+              CachedBankQuestion =
+              {
+                id:
+                  id || undefined,
 
-              options:
-                Array.isArray(
-                  question.options
-                )
-                  ? question.options
-                  : [],
+                question:
+                  text,
 
-              correctIndex:
-                typeof question.correctIndex ===
-                "number"
-                  ? question.correctIndex
-                  : 0,
+                options,
 
-              category,
+                correctIndex,
 
-              explanation:
-                question.explanation,
+                category,
 
-              passage,
-            });
+                explanation:
+                  question.explanation,
+
+                passage,
+              };
+
+            // ⭐ أهم إضافة:
+            // حفظ السؤال باستخدام question.id
+            if (id) {
+              questionById.set(
+                id,
+                cachedQuestion
+              );
+            }
+
+            allQuestions.push(
+              cachedQuestion
+            );
           }
         }
 
@@ -1277,6 +1324,8 @@ async function refreshQuestionIndex(
           at: Date.now(),
 
           questionMeta,
+
+          questionById,
 
           sectionCategory,
 
@@ -1287,7 +1336,7 @@ async function refreshQuestionIndex(
           result;
 
         console.log(
-          `[AI cache] Question index refreshed: ${allQuestions.length} questions`
+          `[AI cache] Question index refreshed: ${allQuestions.length} questions | ${questionById.size} indexed by ID`
         );
 
         return result;
@@ -1322,6 +1371,15 @@ function getCachedQuestionMeta(
 ): CachedQuestionMeta | undefined {
   return questionIndexCache?.questionMeta.get(
     questionText
+  );
+}
+
+// ⭐ البحث المباشر بالـ question.id
+function getCachedQuestionById(
+  questionId: string
+): CachedBankQuestion | undefined {
+  return questionIndexCache?.questionById.get(
+    String(questionId).trim()
   );
 }
 
@@ -1416,11 +1474,6 @@ async function buildStudentProfile(
     return null;
   }
 
-  /*
-    إذا لم يكن الـ cache جاهزاً بعد،
-    نبنيه مرة واحدة فقط.
-  */
-
   if (
     !questionIndexCache
   ) {
@@ -1441,12 +1494,39 @@ async function buildStudentProfile(
   for (
     const attempt of attempts
   ) {
-    const meta =
-      getCachedQuestionMeta(
-        String(
-          attempt.questionId
-        )
+    const questionId =
+      String(
+        attempt.questionId
+      ).trim();
+
+    // =====================================================
+    // ⭐ الإصلاح الأساسي
+    //
+    // أولاً: ابحث بالـID الحقيقي للسؤال.
+    // ثانياً: إذا لم يوجد، جرب النص كخطة احتياطية.
+    // =====================================================
+
+    const cachedQuestion =
+      getCachedQuestionById(
+        questionId
       );
+
+    const meta =
+      cachedQuestion
+        ? {
+            category:
+              normalizeCategory(
+                cachedQuestion.category
+              ),
+            passage:
+              String(
+                cachedQuestion.passage ||
+                  ""
+              ).trim(),
+          }
+        : getCachedQuestionMeta(
+            questionId
+          );
 
     const category =
       normalizeCategory(
@@ -1636,7 +1716,8 @@ async function getCachedStudentProfile(
 
   if (
     cached &&
-    Date.now() - cached.at <
+    Date.now() -
+      cached.at <
       STUDENT_PROFILE_TTL_MS
   ) {
     return cached.profile;
@@ -1664,6 +1745,7 @@ async function getCachedStudentProfile(
 // =========================================================
 
 interface BankQuestion {
+  id?: string;
   question: string;
   options: string[];
   correctIndex: number;
@@ -1749,6 +1831,9 @@ async function fetchSimilarQuestion(
     ];
 
   return {
+    id:
+      picked.id,
+
     question:
       picked.question,
 
@@ -1916,7 +2001,9 @@ async function saveConversationTurn(
         role: "assistant",
         text: assistantText,
       },
-    ].slice(-MAX_SAVED_CONVERSATION_MESSAGES);
+    ].slice(
+      -MAX_SAVED_CONVERSATION_MESSAGES
+    );
 
     if (recent) {
       await app.prisma.aiConversation.update({
@@ -2267,12 +2354,7 @@ export async function aiRoutes(
       }
 
       // =====================================================
-      // ⚡ ابدأ القراءات المستقلة فوراً بالتوازي
-      //
-      // نطلقها الآن بدل ما ننتظر بناء الرسالة (contents)،
-      // عشان تشتغل بالخلفية بينما نجهز السؤال/القطعة.
-      // نفس النتيجة تماماً، بس أسرع لأنها تتداخل زمنياً
-      // مع باقي المعالجة بدل ما تنتظرها.
+      // ⚡ القراءات المستقلة بالتوازي
       // =====================================================
 
       const profileStartedAt =
@@ -2308,6 +2390,7 @@ export async function aiRoutes(
               "AI conversation load error:",
               error
             );
+
             return null;
           }
         );
@@ -2386,17 +2469,24 @@ export async function aiRoutes(
         return reply
           .status(400)
           .send({
-            success: false,
+            success:
+              false,
+
             message:
               "يرجى كتابة سؤال أولاً.",
           });
       }
 
-      if (requestedQuestion.length > 12000) {
+      if (
+        requestedQuestion.length >
+        12000
+      ) {
         return reply
           .status(400)
           .send({
-            success: false,
+            success:
+              false,
+
             message:
               "السؤال أو قطعة الاستيعاب طويلة جداً. الحد الأقصى 12000 حرف.",
           });
@@ -2405,12 +2495,16 @@ export async function aiRoutes(
       if (
         body?.currentQuestion &&
         (
-          !Array.isArray(body.currentQuestion.options) ||
-          body.currentQuestion.options.length < 2 ||
+          !Array.isArray(
+            body.currentQuestion.options
+          ) ||
+          body.currentQuestion.options.length <
+            2 ||
           !Number.isInteger(
             body.currentQuestion.correctIndex
           ) ||
-          body.currentQuestion.correctIndex < 0 ||
+          body.currentQuestion.correctIndex <
+            0 ||
           body.currentQuestion.correctIndex >=
             body.currentQuestion.options.length
         )
@@ -2418,7 +2512,9 @@ export async function aiRoutes(
         return reply
           .status(400)
           .send({
-            success: false,
+            success:
+              false,
+
             message:
               "بيانات السؤال الحالي غير صالحة.",
           });
@@ -2441,7 +2537,9 @@ export async function aiRoutes(
             "60"
           )
           .send({
-            success: false,
+            success:
+              false,
+
             message:
               "لقد استخدمت الحد الأقصى من الأسئلة لهذه الساعة. حاول مجدداً بعد قليل.",
           });
@@ -2466,20 +2564,28 @@ export async function aiRoutes(
 
       const serverHistory =
         Array.isArray(
-          (storedConversation as any)?.messages
+          (
+            storedConversation as any
+          )?.messages
         )
-          ? (storedConversation as any).messages
+          ? (
+              storedConversation as any
+            ).messages
           : [];
 
       const sourceHistory =
         serverHistory.length > 0
           ? serverHistory
-          : Array.isArray(body?.history)
+          : Array.isArray(
+              body?.history
+            )
             ? body.history
             : [];
 
       const recentHistory =
-        sourceHistory.slice(-8);
+        sourceHistory.slice(
+          -8
+        );
 
       for (
         const message of
@@ -3128,8 +3234,7 @@ export async function aiRoutes(
       }
 
       // =====================================================
-      // 🧠 نتيجة القراءات اللي بدأناها بالتوازي من الأعلى
-      //     (studentProfilePromise و statsPromise)
+      // 🧠 نتيجة ملف الطالب
       // =====================================================
 
       const internalProfile:
@@ -3138,7 +3243,10 @@ export async function aiRoutes(
         await studentProfilePromise;
 
       console.log(
-        `[AI profile] ${Date.now() - profileStartedAt}ms`
+        `[AI profile] ${
+          Date.now() -
+          profileStartedAt
+        }ms`
       );
 
       // =====================================================
@@ -3339,41 +3447,36 @@ ${internalProfile.weaknesses.join(
 
       // =====================================================
       // ⚙️ Generation Config
-      //
-      // كل النماذج تستخدم نفس الإعداد:
-      // low  = سؤال عادي
-      // medium = سؤال يحتاج استدلالاً أعمق
-      //
-      // لا temperature.
       // =====================================================
 
-const thinkingLevel =
-  getThinkingLevel(
-    useDeepReasoning
-  );
+      const thinkingLevel =
+        getThinkingLevel(
+          useDeepReasoning
+        );
 
-const generationConfig = {
-  maxOutputTokens: 8192,
+      const generationConfig = {
+        maxOutputTokens:
+          8192,
 
-  thinkingConfig: {
-    thinkingLevel,
-  },
-};
+        thinkingConfig: {
+          thinkingLevel,
+        },
+      };
 
-const payload = {
-  contents,
+      const payload = {
+        contents,
 
-  systemInstruction: {
-    parts: [
-      {
-        text:
-          dynamicSystemPrompt,
-      },
-    ],
-  },
+        systemInstruction: {
+          parts: [
+            {
+              text:
+                dynamicSystemPrompt,
+            },
+          ],
+        },
 
-  generationConfig,
-};
+        generationConfig,
+      };
 
       // =====================================================
       // 🤖 النماذج المتاحة
@@ -3521,6 +3624,7 @@ const payload = {
             clearTimeout(
               streamIdleTimer
             );
+
             streamIdleTimer = null;
           }
         };
@@ -3641,12 +3745,6 @@ const payload = {
               `[Gemini] ❌ فشل ${candidate.model}: ${lastErrMsg}`
             );
 
-            /*
-              ننتقل للنموذج التالي
-              فقط في الأخطاء التي قد تكون
-              مؤقتة أو مرتبطة بالازدحام/الحصة.
-            */
-
             if (
               response.status ===
                 408 ||
@@ -3664,12 +3762,6 @@ const payload = {
               continue;
             }
 
-            /*
-              400 / 401 / 403 / 404
-              غالباً مشكلة طلب أو مفتاح،
-              فلا نضيع وقت تجربة نماذج أخرى.
-            */
-
             break;
           } catch (error: any) {
             clearTimeout(
@@ -3686,11 +3778,6 @@ const payload = {
             console.error(
               `[Gemini] ❌ خطأ ${candidate.model}: ${lastErrMsg}`
             );
-
-            /*
-              Timeout أو network error:
-              نجرب النموذج التالي.
-            */
 
             continue;
           }
@@ -3781,10 +3868,8 @@ const payload = {
           }
         );
 
-        // Heartbeat يساعد بعض الـproxies على إبقاء اتصال SSE مفتوحاً
-        // ودفع أول بايتات الاستجابة للواجهة بسرعة.
         reply.raw.write(
-          `: connected\\n\\n`
+          `: connected\n\n`
         );
 
         const reader =
@@ -3830,6 +3915,7 @@ const payload = {
             clearTimeout(
               streamIdleTimer
             );
+
             streamIdleTimer = null;
           }
 
@@ -3933,10 +4019,7 @@ const payload = {
                 );
               }
             } catch {
-              /*
-                إذا كان chunk غير مكتمل،
-                نتركه للـbuffer التالي.
-              */
+              // تجاهل chunk غير المكتمل
             }
           }
         }
@@ -3945,6 +4028,7 @@ const payload = {
           clearTimeout(
             streamIdleTimer
           );
+
           streamIdleTimer = null;
         }
 
@@ -4090,6 +4174,7 @@ const payload = {
           clearTimeout(
             streamIdleTimer
           );
+
           streamIdleTimer = null;
         }
 
@@ -4112,12 +4197,6 @@ const payload = {
           outgoingUserText &&
           fullAssistantText
         ) {
-          /*
-            الحفظ لا يعطل استجابة الطالب،
-            ويعتمد على السجل الموجود في الخادم
-            بدلاً من إعادة بناء المحادثة من history القادم من الواجهة.
-          */
-
           saveConversationTurn(
             app,
             userId,
