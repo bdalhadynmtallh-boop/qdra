@@ -1254,7 +1254,7 @@ export default function LandingPage({
                 className="mt-8 inline-flex items-center justify-center gap-3 rounded-2xl bg-[#d4a126] px-8 py-4 text-sm font-black text-white shadow-xl shadow-[#d4a126]/20 transition-all duration-300 hover:-translate-y-1 hover:bg-[#e0ad2d] active:scale-[0.98]"
               >
                 <ShoppingCart size={19} />
-                <span>شراء رمز التفعيل من سلة</span>
+                <span>شراء رمز التفعيل من زاهر</span>
                 <ArrowLeft size={18} />
               </a>
 
