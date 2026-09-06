@@ -1,4 +1,10 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+} from "react";
+
 import {
   Bot,
   X,
@@ -8,16 +14,26 @@ import {
   ThumbsUp,
   ThumbsDown,
 } from "lucide-react";
-import { getStoredToken } from "../auth/api";
-import { cn } from "../utils/cn";
+
+import {
+  getStoredToken,
+} from "../auth/api";
+
+import {
+  cn,
+} from "../utils/cn";
 
 /* =========================================================
    🌐 رابط الـ API
-   ========================================================= */
+========================================================= */
 
 const getApiUrl = () => {
-  if (typeof window !== "undefined") {
-    const hostname = window.location.hostname;
+  if (
+    typeof window !==
+    "undefined"
+  ) {
+    const hostname =
+      window.location.hostname;
 
     if (
       hostname === "localhost" ||
@@ -32,66 +48,95 @@ const getApiUrl = () => {
   return "http://localhost:3000";
 };
 
-const API_URL = getApiUrl();
+const API_URL =
+  getApiUrl();
 
 /* =========================================================
    💬 أنواع الرسائل
-   ========================================================= */
+========================================================= */
 
 interface Message {
-  role: "user" | "assistant";
+  role:
+    | "user"
+    | "assistant";
+
   text: string;
-  feedback?: "up" | "down";
+
+  feedback?:
+    | "up"
+    | "down";
+
   truncated?: boolean;
 }
 
 interface HistoryMessage {
-  role: "user" | "assistant";
+  role:
+    | "user"
+    | "assistant";
+
   text: string;
 }
 
 /* =========================================================
    🎓 سياق السؤال
-   ========================================================= */
+========================================================= */
 
 export interface AiQuestionContext {
   question: string;
+
   options: string[];
+
   correctIndex: number;
+
   category?: string;
+
   passage?: string;
 }
 
 /* =========================================================
    ⚡ الأوامر السريعة
-   ========================================================= */
+========================================================= */
 
 const QUICK_ACTIONS: {
   label: string;
   prompt: string;
 }[] = [
   {
-    label: "ما فهمت",
+    label:
+      "ما فهمت",
+
     prompt:
       "ما فهمت الشرح، اشرحه لي بطريقة أبسط وبأسلوب مختلف تمامًا، ولا تكرر نفس طريقة الشرح السابقة.",
   },
+
   {
-    label: "اشرح أبسط",
+    label:
+      "اشرح أبسط",
+
     prompt:
       "اشرح لي الفكرة من الصفر وبأبسط كلمات ممكنة، وكأني أتعلمها لأول مرة.",
   },
+
   {
-    label: "أعطني مثال",
+    label:
+      "أعطني مثال",
+
     prompt:
       "أعطني مثالًا جديدًا وبسيطًا يوضح نفس الفكرة، ثم وضح لي كيف يرتبط المثال بالسؤال.",
   },
+
   {
-    label: "اختبرني",
+    label:
+      "اختبرني",
+
     prompt:
       "اختبرني بسؤال تدريبي جديد على نفس المهارة، ولا تعطيني الإجابة مباشرة.",
   },
+
   {
-    label: "سؤال مشابه",
+    label:
+      "سؤال مشابه",
+
     prompt:
       "أعطني سؤالًا مشابهًا لهذا السؤال للتدريب، مع خيارات، ثم انتظر إجابتي قبل شرح الحل.",
   },
@@ -99,198 +144,361 @@ const QUICK_ACTIONS: {
 
 /* =========================================================
    ⭐ أمر متابعة الشرح المقطوع
-   ========================================================= */
+========================================================= */
 
 const CONTINUE_PROMPT =
   "أكمل الشرح من حيث توقفت بالضبط، دون إعادة ما سبق ذكره.";
 
 /* =========================================================
    🎓 المعلم الذكي
-   ========================================================= */
+========================================================= */
 
 export default function AiChatWidget() {
-  const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [unread, setUnread] = useState(false);
-  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [
+    open,
+    setOpen,
+  ] = useState(
+    false
+  );
 
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [
+    messages,
+    setMessages,
+  ] = useState<
+    Message[]
+  >([]);
 
-  const messagesRef = useRef<Message[]>([]);
+  const [
+    input,
+    setInput,
+  ] = useState("");
+
+  const [
+    loading,
+    setLoading,
+  ] = useState(
+    false
+  );
+
+  const [
+    error,
+    setError,
+  ] = useState<
+    string | null
+  >(null);
+
+  const [
+    unread,
+    setUnread,
+  ] = useState(
+    false
+  );
+
+  const [
+    historyLoaded,
+    setHistoryLoaded,
+  ] = useState(
+    false
+  );
+
+  const scrollRef =
+    useRef<HTMLDivElement>(
+      null
+    );
+
+  const messagesRef =
+    useRef<
+      Message[]
+    >([]);
 
   const abortControllerRef =
-    useRef<AbortController | null>(null);
+    useRef<
+      AbortController | null
+    >(null);
+
+  /*
+   * يمنع تحديث React لكل token صغير.
+   * نجمع القطع ونحدث الواجهة تقريبًا كل frame.
+   */
+  const renderFrameRef =
+    useRef<
+      number | null
+    >(null);
 
   /* =========================================================
      🔄 مزامنة الرسائل
-     ========================================================= */
+  ========================================================= */
 
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
+  useEffect(
+    () => {
+      messagesRef.current =
+        messages;
+    },
+    [
+      messages,
+    ]
+  );
 
   /* =========================================================
      🧹 تنظيف الطلب عند إزالة المكون
-     ========================================================= */
+  ========================================================= */
 
-  useEffect(() => {
-    return () => {
-      abortControllerRef.current?.abort();
-      abortControllerRef.current = null;
-    };
-  }, []);
+  useEffect(
+    () => {
+      return () => {
+        abortControllerRef.current?.abort();
+
+        abortControllerRef.current =
+          null;
+
+        if (
+          renderFrameRef.current !==
+          null
+        ) {
+          cancelAnimationFrame(
+            renderFrameRef.current
+          );
+
+          renderFrameRef.current =
+            null;
+        }
+      };
+    },
+    []
+  );
 
   /* =========================================================
      📥 استرجاع آخر جلسة
-     ========================================================= */
+  ========================================================= */
 
-  const restoreHistory = useCallback(async () => {
-    try {
-      const token = getStoredToken();
+  const restoreHistory =
+    useCallback(
+      async () => {
+        try {
+          const token =
+            getStoredToken();
 
-      const res = await fetch(
-        `${API_URL}/api/ai/history`,
-        {
-          method: "GET",
-          headers: {
-            ...(token
-              ? {
-                  Authorization: `Bearer ${token}`,
-                }
-              : {}),
-          },
-          credentials: "include",
+          const res =
+            await fetch(
+              `${API_URL}/api/ai/history`,
+              {
+                method:
+                  "GET",
+
+                headers: {
+                  ...(token
+                    ? {
+                        Authorization:
+                          `Bearer ${token}`,
+                      }
+                    : {}),
+                },
+
+                credentials:
+                  "include",
+              }
+            );
+
+          if (
+            !res.ok
+          ) {
+            return false;
+          }
+
+          const data =
+            await res.json();
+
+          if (
+            Array.isArray(
+              data?.messages
+            ) &&
+            data.messages.length >
+              0
+          ) {
+            const restoredMessages:
+              Message[] =
+              data.messages
+                .filter(
+                  (
+                    message: unknown
+                  ): message is Message =>
+                    !!message &&
+                    typeof message ===
+                      "object" &&
+                    "role" in
+                      message &&
+                    "text" in
+                      message &&
+                    (
+                      (
+                        message as Message
+                      ).role ===
+                        "user" ||
+                      (
+                        message as Message
+                      ).role ===
+                        "assistant"
+                    ) &&
+                    typeof (
+                      message as Message
+                    ).text ===
+                      "string"
+                )
+                .map(
+                  (
+                    message:
+                      Message
+                  ) => ({
+                    role:
+                      message.role,
+
+                    text:
+                      message.text,
+
+                    ...(message.feedback
+                      ? {
+                          feedback:
+                            message.feedback,
+                        }
+                      : {}),
+
+                    ...(message.truncated
+                      ? {
+                          truncated:
+                            true,
+                        }
+                      : {}),
+                  })
+                );
+
+            if (
+              restoredMessages.length >
+              0
+            ) {
+              messagesRef.current =
+                restoredMessages;
+
+              setMessages(
+                restoredMessages
+              );
+
+              return true;
+            }
+          }
+        } catch {
+          // فشل الاسترجاع لا يمنع فتح المعلم
         }
-      );
 
-      if (!res.ok) {
         return false;
-      }
-
-      const data = await res.json();
-
-      if (
-        Array.isArray(data?.messages) &&
-        data.messages.length > 0
-      ) {
-        const restoredMessages: Message[] =
-          data.messages
-            .filter(
-              (message: unknown): message is Message =>
-                !!message &&
-                typeof message === "object" &&
-                "role" in message &&
-                "text" in message &&
-                (
-                  (message as Message).role ===
-                    "user" ||
-                  (message as Message).role ===
-                    "assistant"
-                ) &&
-                typeof
-                  (message as Message).text ===
-                  "string"
-            )
-            .map((message: Message) => ({
-              role: message.role,
-              text: message.text,
-              ...(message.feedback
-                ? {
-                    feedback:
-                      message.feedback,
-                  }
-                : {}),
-            }));
-
-        if (restoredMessages.length > 0) {
-          messagesRef.current =
-            restoredMessages;
-
-          setMessages(restoredMessages);
-
-          return true;
-        }
-      }
-    } catch {
-      // فشل الاسترجاع لا يمنع فتح المعلم
-    }
-
-    return false;
-  }, []);
+      },
+      []
+    );
 
   /* =========================================================
      👋 تهيئة المحادثة
-     ========================================================= */
+  ========================================================= */
 
-  useEffect(() => {
-    if (!open || historyLoaded) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const initializeChat = async () => {
-      const restored = await restoreHistory();
-
-      if (cancelled) {
+  useEffect(
+    () => {
+      if (
+        !open ||
+        historyLoaded
+      ) {
         return;
       }
 
-      if (!restored) {
-        const welcomeMessage: Message = {
-          role: "assistant",
-          text:
-            "أهلًا بك 👋 أنا معلمك الذكي.\n\n" +
-            "اسألني عن أي سؤال في القدرات اللفظية — " +
-            "التناظر اللفظي، إكمال الجمل، الخطأ السياقي، " +
-            "المفردة المختلفة، أو استيعاب المقروء.\n\n" +
-            "وأشرح لك الحل خطوة بخطوة وبطريقة تناسب فهمك.",
+      let cancelled =
+        false;
+
+      const initializeChat =
+        async () => {
+          const restored =
+            await restoreHistory();
+
+          if (
+            cancelled
+          ) {
+            return;
+          }
+
+          if (
+            !restored
+          ) {
+            const welcomeMessage:
+              Message = {
+              role:
+                "assistant",
+
+              text:
+                "أهلًا بك 👋 أنا معلمك الذكي.\n\n" +
+                "اسألني عن أي سؤال في القدرات اللفظية — " +
+                "التناظر اللفظي، إكمال الجمل، الخطأ السياقي، " +
+                "المفردة المختلفة، أو استيعاب المقروء.\n\n" +
+                "وأشرح لك الحل خطوة بخطوة وبطريقة تناسب فهمك.",
+            };
+
+            messagesRef.current = [
+              welcomeMessage,
+            ];
+
+            setMessages([
+              welcomeMessage,
+            ]);
+          }
+
+          setHistoryLoaded(
+            true
+          );
         };
 
-        messagesRef.current = [
-          welcomeMessage,
-        ];
+      initializeChat();
 
-        setMessages([welcomeMessage]);
-      }
-
-      setHistoryLoaded(true);
-    };
-
-    initializeChat();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    open,
-    historyLoaded,
-    restoreHistory,
-  ]);
+      return () => {
+        cancelled =
+          true;
+      };
+    },
+    [
+      open,
+      historyLoaded,
+      restoreHistory,
+    ]
+  );
 
   /* =========================================================
      📡 الطلب الموحد
-     ========================================================= */
+  ========================================================= */
 
   const performStreamingRequest =
     useCallback(
       async (
-        newMessages: Message[],
+        newMessages:
+          Message[],
+
         payload: {
-          question?: string;
-          currentQuestion?: AiQuestionContext;
-          history: HistoryMessage[];
+          question?:
+            string;
+
+          currentQuestion?:
+            AiQuestionContext;
+
+          history:
+            HistoryMessage[];
         }
       ) => {
-        if (loading) {
+        if (
+          loading
+        ) {
           return;
         }
 
-        setLoading(true);
-        setError(null);
+        setLoading(
+          true
+        );
+
+        setError(
+          null
+        );
 
         abortControllerRef.current?.abort();
 
@@ -300,29 +508,1105 @@ export default function AiChatWidget() {
         abortControllerRef.current =
           controller;
 
-        const assistantPlaceholder: Message = {
-          role: "assistant",
-          text: "",
+        const assistantPlaceholder:
+          Message = {
+          role:
+            "assistant",
+
+          text:
+            "",
         };
 
-        const messagesWithPlaceholder: Message[] =
-          [
-            ...newMessages,
-            assistantPlaceholder,
-          ];
+        const messagesWithPlaceholder:
+          Message[] = [
+          ...newMessages,
+          assistantPlaceholder,
+        ];
 
         messagesRef.current =
           messagesWithPlaceholder;
 
-        setMessages(messagesWithPlaceholder);
+        setMessages(
+          messagesWithPlaceholder
+        );
 
         try {
-          const token = getStoredToken();
+          const token =
+            getStoredToken();
 
-          const res = await fetch(
-            `${API_URL}/api/ai/ask`,
+          const res =
+            await fetch(
+              `${API_URL}/api/ai/ask`,
+              {
+                method:
+                  "POST",
+
+                headers: {
+                  "Content-Type":
+                    "application/json",
+
+                  ...(token
+                    ? {
+                        Authorization:
+                          `Bearer ${token}`,
+                      }
+                    : {}),
+                },
+
+                credentials:
+                  "include",
+
+                signal:
+                  controller.signal,
+
+                body:
+                  JSON.stringify(
+                    payload
+                  ),
+              }
+            );
+
+          /* =================================================
+             🚦 أخطاء HTTP
+          ================================================= */
+
+          if (
+            res.status ===
+            401
+          ) {
+            throw new Error(
+              "انتهت جلسة تسجيل الدخول. سجّل الدخول مرة أخرى."
+            );
+          }
+
+          if (
+            res.status ===
+            403
+          ) {
+            throw new Error(
+              "ليس لديك صلاحية لاستخدام المعلم الذكي."
+            );
+          }
+
+          if (
+            res.status ===
+            429
+          ) {
+            const errorData =
+              await res
+                .json()
+                .catch(
+                  () =>
+                    null
+                );
+
+            throw new Error(
+              errorData?.message ||
+                "لقد وصلت للحد الأقصى من الاستخدام. حاول مرة أخرى لاحقًا."
+            );
+          }
+
+          if (
+            !res.ok
+          ) {
+            const errorData =
+              await res
+                .json()
+                .catch(
+                  () =>
+                    null
+                );
+
+            throw new Error(
+              errorData?.message ||
+                "تعذر الحصول على إجابة الآن."
+            );
+          }
+
+          /* =================================================
+             📡 التأكد من وجود البث
+          ================================================= */
+
+          if (
+            !res.body
+          ) {
+            throw new Error(
+              "الخادم لم يُرجع بثًا للمعلم."
+            );
+          }
+
+          const reader =
+            res.body.getReader();
+
+          const decoder =
+            new TextDecoder(
+              "utf-8"
+            );
+
+          let buffer =
+            "";
+
+          let fullAssistantText =
+            "";
+
+          let streamFinished =
+            false;
+
+          let wasTruncated =
+            false;
+
+          /*
+           * تحديث الرسالة التي يتم بثها.
+           *
+           * لا يتم استدعاء setMessages مع كل token مباشرة،
+           * بل مرة واحدة لكل animation frame.
+           */
+          const scheduleStreamingRender =
+            () => {
+              if (
+                renderFrameRef.current !==
+                null
+              ) {
+                return;
+              }
+
+              renderFrameRef.current =
+                requestAnimationFrame(
+                  () => {
+                    renderFrameRef.current =
+                      null;
+
+                    const text =
+                      fullAssistantText;
+
+                    setMessages(
+                      (
+                        prev
+                      ) => {
+                        const updated =
+                          [
+                            ...prev,
+                          ];
+
+                        const lastIndex =
+                          updated.length -
+                          1;
+
+                        if (
+                          lastIndex >=
+                            0 &&
+                          updated[
+                            lastIndex
+                          ]?.role ===
+                            "assistant"
+                        ) {
+                          updated[
+                            lastIndex
+                          ] = {
+                            ...updated[
+                              lastIndex
+                            ],
+                            text,
+                          };
+                        }
+
+                        messagesRef.current =
+                          updated;
+
+                        return updated;
+                      }
+                    );
+                  }
+                );
+            };
+
+          /*
+           * يضمن عرض آخر محتوى حتى لو انتهى البث
+           * قبل تنفيذ animation frame المنتظر.
+           */
+          const flushStreamingRender =
+            () => {
+              if (
+                renderFrameRef.current !==
+                null
+              ) {
+                cancelAnimationFrame(
+                  renderFrameRef.current
+                );
+
+                renderFrameRef.current =
+                  null;
+              }
+
+              const text =
+                fullAssistantText;
+
+              setMessages(
+                (
+                  prev
+                ) => {
+                  const updated =
+                    [
+                      ...prev,
+                    ];
+
+                  const lastIndex =
+                    updated.length -
+                    1;
+
+                  if (
+                    lastIndex >=
+                      0 &&
+                    updated[
+                      lastIndex
+                    ]?.role ===
+                      "assistant"
+                  ) {
+                    updated[
+                      lastIndex
+                    ] = {
+                      ...updated[
+                        lastIndex
+                      ],
+                      text,
+                    };
+                  }
+
+                  messagesRef.current =
+                    updated;
+
+                  return updated;
+                }
+              );
+            };
+
+          /* =================================================
+             🧩 معالجة سطر SSE
+          ================================================= */
+
+          const processLine =
+            (
+              line:
+                string
+            ) => {
+              const trimmed =
+                line.trim();
+
+              if (
+                !trimmed
+              ) {
+                return;
+              }
+
+              if (
+                trimmed.startsWith(
+                  ":"
+                )
+              ) {
+                return;
+              }
+
+              if (
+                !trimmed.startsWith(
+                  "data:"
+                )
+              ) {
+                return;
+              }
+
+              const jsonStr =
+                trimmed
+                  .slice(
+                    5
+                  )
+                  .trim();
+
+              if (
+                !jsonStr ||
+                jsonStr ===
+                  "[DONE]"
+              ) {
+                return;
+              }
+
+              let parsed:
+                any;
+
+              try {
+                parsed =
+                  JSON.parse(
+                    jsonStr
+                  );
+              } catch {
+                console.warn(
+                  "⚠️ تعذر تحليل SSE:",
+                  jsonStr
+                );
+
+                return;
+              }
+
+              /* =============================================
+                 ❌ خطأ من السيرفر
+              ============================================= */
+
+              if (
+                parsed?.error
+              ) {
+                throw new Error(
+                  String(
+                    parsed.error
+                  )
+                );
+              }
+
+              /* =============================================
+                 ✅ نهاية البث
+              ============================================= */
+
+              if (
+                parsed?.done ===
+                true
+              ) {
+                streamFinished =
+                  true;
+
+                console.log(
+                  "✅ AI STREAM DONE",
+                  {
+                    model:
+                      parsed.model,
+
+                    finishReason:
+                      parsed.finishReason,
+
+                    thinkingLevel:
+                      parsed.thinkingLevel,
+
+                    truncated:
+                      parsed.truncated,
+
+                    textLength:
+                      fullAssistantText.length,
+                  }
+                );
+
+                if (
+                  parsed.truncated ===
+                    true ||
+                  parsed.finishReason ===
+                    "length" ||
+                  parsed.finishReason ===
+                    "MAX_TOKENS"
+                ) {
+                  wasTruncated =
+                    true;
+                }
+
+                return;
+              }
+
+              /* =============================================
+                 ✍️ Streaming النص
+              ============================================= */
+
+              if (
+                typeof parsed?.piece ===
+                "string" &&
+                parsed.piece
+              ) {
+                fullAssistantText +=
+                  parsed.piece;
+
+                scheduleStreamingRender();
+              }
+            };
+
+          /* =================================================
+             🔄 قراءة البث
+          ================================================= */
+
+          while (
+            true
+          ) {
+            const {
+              done,
+              value,
+            } =
+              await reader.read();
+
+            if (
+              done
+            ) {
+              break;
+            }
+
+            if (
+              !value
+            ) {
+              continue;
+            }
+
+            buffer +=
+              decoder.decode(
+                value,
+                {
+                  stream:
+                    true,
+                }
+              );
+
+            const lines =
+              buffer.split(
+                /\r?\n/
+              );
+
+            buffer =
+              lines.pop() ||
+              "";
+
+            for (
+              const line of
+                lines
+            ) {
+              processLine(
+                line
+              );
+            }
+          }
+
+          /* =================================================
+             🧹 آخر جزء
+          ================================================= */
+
+          buffer +=
+            decoder.decode();
+
+          if (
+            buffer.trim()
+          ) {
+            const finalLines =
+              buffer.split(
+                /\r?\n/
+              );
+
+            for (
+              const line of
+                finalLines
+            ) {
+              if (
+                line.trim()
+              ) {
+                processLine(
+                  line
+                );
+              }
+            }
+          }
+
+          flushStreamingRender();
+
+          /* =================================================
+             📡 تشخيص إغلاق الستريم
+          ================================================= */
+
+          console.log(
+            "📡 AI STREAM CLOSED",
             {
-              method: "POST",
+              streamFinished,
+
+              textLength:
+                fullAssistantText.length,
+
+              textPreview:
+                fullAssistantText.slice(
+                  -150
+                ),
+            }
+          );
+
+          /* =================================================
+             ❌ لم تصل إجابة
+          ================================================= */
+
+          if (
+            !fullAssistantText.trim()
+          ) {
+            throw new Error(
+              "لم تصل إجابة من المعلم. حاول مرة أخرى."
+            );
+          }
+
+          /* =================================================
+             ⚠️ الستريم انقطع بدون done
+          ================================================= */
+
+          if (
+            !streamFinished
+          ) {
+            console.error(
+              "❌ AI STREAM CLOSED WITHOUT DONE",
+              {
+                textLength:
+                  fullAssistantText.length,
+
+                lastCharacters:
+                  fullAssistantText.slice(
+                    -200
+                  ),
+              }
+            );
+
+            wasTruncated =
+              true;
+          }
+
+          /* =================================================
+             ⚠️ تعليم الإجابة كمقطوعة
+          ================================================= */
+
+          if (
+            wasTruncated
+          ) {
+            setMessages(
+              (
+                prev
+              ) => {
+                const updated =
+                  [
+                    ...prev,
+                  ];
+
+                const lastIndex =
+                  updated.length -
+                  1;
+
+                if (
+                  lastIndex >=
+                    0 &&
+                  updated[
+                    lastIndex
+                  ]?.role ===
+                    "assistant"
+                ) {
+                  updated[
+                    lastIndex
+                  ] = {
+                    ...updated[
+                      lastIndex
+                    ],
+                    truncated:
+                      true,
+                  };
+                }
+
+                messagesRef.current =
+                  updated;
+
+                return updated;
+              }
+            );
+
+            setError(
+              'توقف الشرح قبل اكتماله. اضغط "أكمل الشرح" لمتابعته.'
+            );
+          }
+
+          /*
+           * لو جاءت إجابة أثناء إغلاق النافذة،
+           * نُظهر مؤشر unread.
+           */
+          if (
+            !open
+          ) {
+            setUnread(
+              true
+            );
+          }
+        } catch (
+          err:
+            unknown
+        ) {
+          /* =================================================
+             🚫 Abort طبيعي
+          ================================================= */
+
+          if (
+            err instanceof
+              DOMException &&
+            err.name ===
+              "AbortError"
+          ) {
+            return;
+          }
+
+          console.error(
+            "❌ AI REQUEST ERROR:",
+            err
+          );
+
+          const message =
+            err instanceof
+              Error
+              ? err.message
+              : "تعذر الاتصال بالخادم.";
+
+          setError(
+            message
+          );
+
+          setMessages(
+            (
+              prev
+            ) => {
+              const last =
+                prev[
+                  prev.length -
+                    1
+                ];
+
+              /*
+               * نحذف placeholder فقط إذا لم يصل
+               * أي نص بالفعل.
+               */
+              if (
+                last?.role ===
+                  "assistant" &&
+                !last.text
+              ) {
+                const updated =
+                  prev.slice(
+                    0,
+                    -1
+                  );
+
+                messagesRef.current =
+                  updated;
+
+                return updated;
+              }
+
+              /*
+               * إذا وصل جزء من الرد ثم حدث خطأ،
+               * نبقي النص ونعلّمه بأنه مقطوع.
+               */
+              if (
+                last?.role ===
+                  "assistant" &&
+                last.text
+              ) {
+                const updated =
+                  [
+                    ...prev,
+                  ];
+
+                updated[
+                  updated.length -
+                    1
+                ] = {
+                  ...last,
+                  truncated:
+                    true,
+                };
+
+                messagesRef.current =
+                  updated;
+
+                return updated;
+              }
+
+              return prev;
+            }
+          );
+        } finally {
+          if (
+            renderFrameRef.current !==
+            null
+          ) {
+            cancelAnimationFrame(
+              renderFrameRef.current
+            );
+
+            renderFrameRef.current =
+              null;
+          }
+
+          if (
+            abortControllerRef.current ===
+            controller
+          ) {
+            abortControllerRef.current =
+              null;
+          }
+
+          setLoading(
+            false
+          );
+        }
+      },
+      [
+        loading,
+        open,
+      ]
+    );
+
+  /* =========================================================
+     🎓 سؤال من الصفحة
+  ========================================================= */
+
+  const askWithContext =
+    useCallback(
+      (
+        ctx:
+          AiQuestionContext
+      ) => {
+        if (
+          loading ||
+          !ctx?.question
+        ) {
+          return;
+        }
+
+        setOpen(
+          true
+        );
+
+        setUnread(
+          false
+        );
+
+        setInput(
+          ""
+        );
+
+        setError(
+          null
+        );
+
+        const currentMessages =
+          messagesRef.current;
+
+        const newMessages:
+          Message[] = [
+          ...currentMessages,
+
+          {
+            role:
+              "user",
+
+            text:
+              `📌 السؤال: ${ctx.question}`,
+          },
+        ];
+
+        messagesRef.current =
+          newMessages;
+
+        setMessages(
+          newMessages
+        );
+
+        /*
+         * نستبعد رسالة السؤال الحالية من history،
+         * لأن السؤال نفسه سيصل في currentQuestion.
+         *
+         * هذا يقلل التكرار داخل prompt.
+         */
+        const history:
+          HistoryMessage[] =
+          currentMessages
+            .filter(
+              (
+                message
+              ) =>
+                Boolean(
+                  message.text.trim()
+                )
+            )
+            .slice(
+              -8
+            )
+            .map(
+              (
+                message
+              ) => ({
+                role:
+                  message.role,
+
+                text:
+                  message.text,
+              })
+            );
+
+        performStreamingRequest(
+          newMessages,
+          {
+            currentQuestion:
+              ctx,
+
+            history,
+          }
+        );
+      },
+      [
+        loading,
+        performStreamingRequest,
+      ]
+    );
+
+  /* =========================================================
+     📥 استقبال حدث السؤال
+  ========================================================= */
+
+  useEffect(
+    () => {
+      const handler =
+        (
+          e:
+            Event
+        ) => {
+          const customEvent =
+            e as CustomEvent<AiQuestionContext>;
+
+          const ctx =
+            customEvent.detail;
+
+          if (
+            ctx &&
+            typeof ctx.question ===
+              "string" &&
+            ctx.question.trim()
+          ) {
+            askWithContext(
+              ctx
+            );
+          }
+        };
+
+      window.addEventListener(
+        "qdra:ask-teacher",
+        handler
+      );
+
+      return () => {
+        window.removeEventListener(
+          "qdra:ask-teacher",
+          handler
+        );
+      };
+    },
+    [
+      askWithContext,
+    ]
+  );
+
+  /* =========================================================
+     ⬇️ التمرير التلقائي
+  ========================================================= */
+
+  useEffect(
+    () => {
+      const element =
+        scrollRef.current;
+
+      if (
+        !element
+      ) {
+        return;
+      }
+
+      requestAnimationFrame(
+        () => {
+          element.scrollTop =
+            element.scrollHeight;
+        }
+      );
+    },
+    [
+      messages,
+      loading,
+    ]
+  );
+
+  /* =========================================================
+     ✉️ إرسال رسالة
+  ========================================================= */
+
+  const send =
+    useCallback(
+      async (
+        overrideText?:
+          string
+      ) => {
+        const question =
+          (
+            overrideText ??
+            input
+          ).trim();
+
+        if (
+          !question ||
+          loading
+        ) {
+          return;
+        }
+
+        setInput(
+          ""
+        );
+
+        setError(
+          null
+        );
+
+        const currentMessages =
+          messagesRef.current;
+
+        const newMessages:
+          Message[] = [
+          ...currentMessages,
+
+          {
+            role:
+              "user",
+
+            text:
+              question,
+          },
+        ];
+
+        messagesRef.current =
+          newMessages;
+
+        setMessages(
+          newMessages
+        );
+
+        /*
+         * لا نكرر السؤال الحالي داخل history.
+         * الـBackend يستلمه أصلًا في question.
+         */
+        const history:
+          HistoryMessage[] =
+          currentMessages
+            .filter(
+              (
+                message
+              ) =>
+                Boolean(
+                  message.text.trim()
+                )
+            )
+            .slice(
+              -8
+            )
+            .map(
+              (
+                message
+              ) => ({
+                role:
+                  message.role,
+
+                text:
+                  message.text,
+              })
+            );
+
+        await performStreamingRequest(
+          newMessages,
+          {
+            question,
+
+            history,
+          }
+        );
+      },
+      [
+        input,
+        loading,
+        performStreamingRequest,
+      ]
+    );
+
+  /* =========================================================
+     ➡️ إكمال شرح مقطوع
+  ========================================================= */
+
+  const continueTruncated =
+    useCallback(
+      () => {
+        if (
+          loading
+        ) {
+          return;
+        }
+
+        send(
+          CONTINUE_PROMPT
+        );
+      },
+      [
+        loading,
+        send,
+      ]
+    );
+
+  /* =========================================================
+     👍👎 التقييم
+  ========================================================= */
+
+  const sendFeedback =
+    useCallback(
+      async (
+        index:
+          number,
+
+        rating:
+          | "up"
+          | "down"
+      ) => {
+        setMessages(
+          (
+            prev
+          ) => {
+            const updated =
+              [
+                ...prev,
+              ];
+
+            if (
+              updated[
+                index
+              ]
+            ) {
+              updated[
+                index
+              ] = {
+                ...updated[
+                  index
+                ],
+
+                feedback:
+                  rating,
+              };
+            }
+
+            messagesRef.current =
+              updated;
+
+            return updated;
+          }
+        );
+
+        try {
+          const token =
+            getStoredToken();
+
+          await fetch(
+            `${API_URL}/api/ai/feedback`,
+            {
+              method:
+                "POST",
 
               headers: {
                 "Content-Type":
@@ -336,635 +1620,30 @@ export default function AiChatWidget() {
                   : {}),
               },
 
-              credentials: "include",
-
-              signal: controller.signal,
+              credentials:
+                "include",
 
               body:
                 JSON.stringify(
-                  payload
+                  {
+                    messageIndex:
+                      index,
+
+                    rating,
+                  }
                 ),
             }
           );
-
-          /* =====================================================
-             🚦 أخطاء HTTP
-             ===================================================== */
-
-          if (res.status === 401) {
-            throw new Error(
-              "انتهت جلسة تسجيل الدخول. سجّل الدخول مرة أخرى."
-            );
-          }
-
-          if (res.status === 403) {
-            throw new Error(
-              "ليس لديك صلاحية لاستخدام المعلم الذكي."
-            );
-          }
-
-          if (res.status === 429) {
-            const errorData =
-              await res
-                .json()
-                .catch(() => null);
-
-            throw new Error(
-              errorData?.message ||
-                "لقد وصلت للحد الأقصى من الاستخدام. حاول مرة أخرى لاحقًا."
-            );
-          }
-
-          if (!res.ok) {
-            const errorData =
-              await res
-                .json()
-                .catch(() => null);
-
-            throw new Error(
-              errorData?.message ||
-                "تعذر الحصول على إجابة الآن."
-            );
-          }
-
-          const reader =
-            res.body?.getReader();
-
-          if (!reader) {
-            throw new Error(
-              "تعذر قراءة مخرجات الخدمة."
-            );
-          }
-
-          const decoder =
-            new TextDecoder(
-              "utf-8"
-            );
-
-          let buffer = "";
-          let fullAssistantText = "";
-          let streamFinished = false;
-
-          // ⭐ هل أعلن الخادم أن الإجابة توقفت قبل اكتمالها
-          // (finishReason === "MAX_TOKENS")؟
-          let wasTruncated = false;
-
-          /* =====================================================
-             🧩 معالجة سطر SSE
-             ===================================================== */
-
-          const processLine = (
-            line: string
-          ) => {
-            const trimmed =
-              line.trim();
-
-            if (!trimmed) {
-              return;
-            }
-
-            if (
-              !trimmed.startsWith(
-                "data:"
-              )
-            ) {
-              return;
-            }
-
-            const jsonStr =
-              trimmed
-                .slice(5)
-                .trim();
-
-            if (
-              !jsonStr ||
-              jsonStr === "[DONE]"
-            ) {
-              return;
-            }
-
-            try {
-              const parsed =
-                JSON.parse(
-                  jsonStr
-                );
-
-              if (
-                parsed.error
-              ) {
-                throw new Error(
-                  String(
-                    parsed.error
-                  )
-                );
-              }
-
-              if (
-                parsed.done
-              ) {
-                streamFinished =
-                  true;
-
-                // ⭐ الباك إند يرسل truncated=true عندما يتوقف
-                // النموذج بسبب MAX_TOKENS بدل ما يكمل الإجابة.
-                if (
-                  parsed.truncated ===
-                  true
-                ) {
-                  wasTruncated =
-                    true;
-                }
-
-                return;
-              }
-
-              if (
-                typeof
-                  parsed.piece ===
-                  "string"
-              ) {
-                fullAssistantText +=
-                  parsed.piece;
-
-                setMessages((prev) => {
-                  const updated = [
-                    ...prev,
-                  ];
-
-                  const lastIndex =
-                    updated.length - 1;
-
-                  if (
-                    lastIndex >= 0 &&
-                    updated[
-                      lastIndex
-                    ].role ===
-                      "assistant"
-                  ) {
-                    updated[
-                      lastIndex
-                    ] = {
-                      role:
-                        "assistant",
-                      text:
-                        fullAssistantText,
-                    };
-                  }
-
-                  messagesRef.current =
-                    updated;
-
-                  return updated;
-                });
-              }
-            } catch (err) {
-              if (
-                err instanceof Error
-              ) {
-                throw err;
-              }
-
-              // تجاهل JSON غير الصالح
-            }
-          };
-
-          /* =====================================================
-             🔄 قراءة البث
-             ===================================================== */
-
-          while (true) {
-            const { done, value } =
-              await reader.read();
-
-            if (done) {
-              break;
-            }
-
-            buffer +=
-              decoder.decode(
-                value,
-                {
-                  stream: true,
-                }
-              );
-
-            const lines =
-              buffer.split(
-                /\r?\n/
-              );
-
-            buffer =
-              lines.pop() || "";
-
-            for (
-              const line of
-                lines
-            ) {
-              processLine(line);
-            }
-          }
-
-          /* =====================================================
-             🧹 آخر جزء
-             ===================================================== */
-
-          buffer +=
-            decoder.decode();
-
-          if (buffer.trim()) {
-            const finalLines =
-              buffer.split(
-                /\r?\n/
-              );
-
-            for (
-              const line of
-                finalLines
-            ) {
-              if (
-                line.trim()
-              ) {
-                processLine(line);
-              }
-            }
-          }
-
-          /* =====================================================
-             ✅ التأكد من اكتمال الإجابة
-             ===================================================== */
-
-          if (
-            !fullAssistantText.trim()
-          ) {
-            throw new Error(
-              "لم تصل إجابة من المعلم. حاول مرة أخرى."
-            );
-          }
-
-          /*
-            لا نعتبر انتهاء اتصال HTTP وحده
-            دليلاً على نجاح البث.
-            النجاح الحقيقي يكون عند وجود نص.
-
-            ⭐ لو انقطع الستريم دون حدث done صريح،
-            نعتبرها أيضًا إجابة مقطوعة ونبلغ المستخدم،
-            بدل ما نمرر الأمر بصمت في الكونسول فقط.
-          */
-
-          if (!streamFinished) {
-            console.warn(
-              "AI stream closed without explicit done event."
-            );
-
-            wasTruncated = true;
-          }
-
-          if (wasTruncated) {
-            setMessages((prev) => {
-              const updated = [
-                ...prev,
-              ];
-
-              const lastIndex =
-                updated.length - 1;
-
-              if (
-                lastIndex >= 0 &&
-                updated[
-                  lastIndex
-                ].role ===
-                  "assistant"
-              ) {
-                updated[
-                  lastIndex
-                ] = {
-                  ...updated[
-                    lastIndex
-                  ],
-                  truncated:
-                    true,
-                };
-              }
-
-              messagesRef.current =
-                updated;
-
-              return updated;
-            });
-
-            setError(
-              "توقف الشرح قبل اكتماله. اضغط \"أكمل الشرح\" لمتابعته."
-            );
-          }
-        } catch (err: unknown) {
-          if (
-            err instanceof DOMException &&
-            err.name === "AbortError"
-          ) {
-            return;
-          }
-
-          const message =
-            err instanceof Error
-              ? err.message
-              : "تعذر الاتصال بالخادم.";
-
-          setError(message);
-
-          setMessages((prev) => {
-            const last =
-              prev[prev.length - 1];
-
-            if (
-              last?.role === "assistant" &&
-              !last.text
-            ) {
-              const updated =
-                prev.slice(0, -1);
-
-              messagesRef.current =
-                updated;
-
-              return updated;
-            }
-
-            return prev;
-          });
-        } finally {
-          if (
-            abortControllerRef.current ===
-            controller
-          ) {
-            abortControllerRef.current =
-              null;
-          }
-
-          setLoading(false);
+        } catch {
+          // التقييم اختياري
         }
       },
-      [loading]
+      []
     );
-
-  /* =========================================================
-     🎓 سؤال من الصفحة
-     ========================================================= */
-
-  const askWithContext = useCallback(
-    (ctx: AiQuestionContext) => {
-      if (
-        loading ||
-        !ctx?.question
-      ) {
-        return;
-      }
-
-      setOpen(true);
-      setUnread(false);
-      setInput("");
-      setError(null);
-
-      const currentMessages =
-        messagesRef.current;
-
-      const newMessages: Message[] = [
-        ...currentMessages,
-        {
-          role: "user",
-          text:
-            `📌 السؤال: ${ctx.question}`,
-        },
-      ];
-
-      messagesRef.current =
-        newMessages;
-
-      setMessages(newMessages);
-
-      const history: HistoryMessage[] =
-        newMessages
-          .slice(-8)
-          .map((message) => ({
-            role: message.role,
-            text: message.text,
-          }));
-
-      performStreamingRequest(
-        newMessages,
-        {
-          currentQuestion: ctx,
-          history,
-        }
-      );
-    },
-    [
-      loading,
-      performStreamingRequest,
-    ]
-  );
-
-  /* =========================================================
-     📥 استقبال الحدث
-     ========================================================= */
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const customEvent =
-        e as CustomEvent<AiQuestionContext>;
-
-      const ctx =
-        customEvent.detail;
-
-      if (
-        ctx &&
-        typeof ctx.question ===
-          "string" &&
-        ctx.question.trim()
-      ) {
-        askWithContext(ctx);
-      }
-    };
-
-    window.addEventListener(
-      "qdra:ask-teacher",
-      handler
-    );
-
-    return () => {
-      window.removeEventListener(
-        "qdra:ask-teacher",
-        handler
-      );
-    };
-  }, [askWithContext]);
-
-  /* =========================================================
-     ⬇️ التمرير التلقائي
-     ========================================================= */
-
-  useEffect(() => {
-    const element =
-      scrollRef.current;
-
-    if (!element) {
-      return;
-    }
-
-    requestAnimationFrame(() => {
-      element.scrollTop =
-        element.scrollHeight;
-    });
-  }, [
-    messages,
-    loading,
-  ]);
-
-  /* =========================================================
-     ✉️ إرسال رسالة
-     ========================================================= */
-
-  const send = useCallback(
-    async (
-      overrideText?: string
-    ) => {
-      const question = (
-        overrideText ?? input
-      ).trim();
-
-      if (
-        !question ||
-        loading
-      ) {
-        return;
-      }
-
-      setInput("");
-      setError(null);
-
-      const currentMessages =
-        messagesRef.current;
-
-      const newMessages: Message[] = [
-        ...currentMessages,
-        {
-          role: "user",
-          text: question,
-        },
-      ];
-
-      messagesRef.current =
-        newMessages;
-
-      setMessages(newMessages);
-
-      const history: HistoryMessage[] =
-        newMessages
-          .slice(-8)
-          .map((message) => ({
-            role: message.role,
-            text: message.text,
-          }));
-
-      await performStreamingRequest(
-        newMessages,
-        {
-          question,
-          history,
-        }
-      );
-    },
-    [
-      input,
-      loading,
-      performStreamingRequest,
-    ]
-  );
-
-  /* =========================================================
-     ➡️ إكمال شرح مقطوع
-     ========================================================= */
-
-  const continueTruncated = useCallback(
-    () => {
-      if (loading) {
-        return;
-      }
-
-      send(CONTINUE_PROMPT);
-    },
-    [loading, send]
-  );
-
-  /* =========================================================
-     👍👎 التقييم
-     ========================================================= */
-
-  const sendFeedback = useCallback(
-    async (
-      index: number,
-      rating: "up" | "down"
-    ) => {
-      setMessages((prev) => {
-        const updated =
-          [...prev];
-
-        if (
-          updated[index]
-        ) {
-          updated[index] = {
-            ...updated[index],
-            feedback:
-              rating,
-          };
-        }
-
-        messagesRef.current =
-          updated;
-
-        return updated;
-      });
-
-      try {
-        const token =
-          getStoredToken();
-
-        await fetch(
-          `${API_URL}/api/ai/feedback`,
-          {
-            method: "POST",
-
-            headers: {
-              "Content-Type":
-                "application/json",
-
-              ...(token
-                ? {
-                    Authorization:
-                      `Bearer ${token}`,
-                  }
-                : {}),
-            },
-
-            credentials:
-              "include",
-
-            body:
-              JSON.stringify({
-                messageIndex:
-                  index,
-                rating,
-              }),
-          }
-        );
-      } catch {
-        // التقييم اختياري
-      }
-    },
-    []
-  );
 
   /* =========================================================
      🖥️ الواجهة
-     ========================================================= */
+  ========================================================= */
 
   return (
     <>
@@ -973,18 +1652,28 @@ export default function AiChatWidget() {
       <button
         type="button"
         onClick={() => {
-          setOpen(true);
-          setUnread(false);
+          setOpen(
+            true
+          );
+
+          setUnread(
+            false
+          );
         }}
         className={cn(
           "fixed bottom-24 left-4 z-50 flex h-14 w-14 items-center justify-center rounded-full shadow-2xl transition-all md:bottom-6 md:left-6",
           "bg-gold-500 text-black hover:bg-gold-400 active:scale-95",
-          open && "hidden"
+          open &&
+            "hidden"
         )}
         aria-label="المعلم الذكي"
         title="المعلم الذكي"
       >
-        <Bot size={26} />
+        <Bot
+          size={
+            26
+          }
+        />
 
         {unread &&
           !open && (
@@ -998,12 +1687,19 @@ export default function AiChatWidget() {
 
       {open && (
         <div className="fixed inset-0 z-[60] flex flex-col bg-ink-950/95 backdrop-blur-sm sm:inset-auto sm:bottom-6 sm:left-6 sm:h-[600px] sm:max-h-[80vh] sm:w-[380px] sm:rounded-3xl sm:border sm:border-white/10 sm:shadow-2xl">
+
           {/* Header */}
 
           <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-l from-gold-500/20 to-transparent px-4 py-3">
+
             <div className="flex items-center gap-3">
+
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gold-500 text-black">
-                <Sparkles size={20} />
+                <Sparkles
+                  size={
+                    20
+                  }
+                />
               </div>
 
               <div>
@@ -1013,31 +1709,48 @@ export default function AiChatWidget() {
 
                 <div className="flex items-center gap-1.5 text-[10px] font-semibold text-emerald-400">
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                  جاهز للإجابة
+
+                  {loading
+                    ? "يفكر الآن..."
+                    : "جاهز للإجابة"}
                 </div>
               </div>
+
             </div>
 
             <button
               type="button"
               onClick={() =>
-                setOpen(false)
+                setOpen(
+                  false
+                )
               }
               className="press flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-ink-300 hover:bg-white/10"
               aria-label="إغلاق"
             >
-              <X size={18} />
+              <X
+                size={
+                  18
+                }
+              />
             </button>
+
           </div>
 
           {/* Messages */}
 
           <div
-            ref={scrollRef}
+            ref={
+              scrollRef
+            }
             className="flex-1 space-y-3 overflow-y-auto p-4"
           >
+
             {messages.map(
-              (m, i) => (
+              (
+                m,
+                i
+              ) => (
                 <div
                   key={`${i}-${m.role}`}
                   className={cn(
@@ -1047,6 +1760,7 @@ export default function AiChatWidget() {
                       : "ml-auto max-w-[85%]"
                   )}
                 >
+
                   {m.text && (
                     <div
                       className={cn(
@@ -1057,16 +1771,19 @@ export default function AiChatWidget() {
                           : "rounded-tl-sm border border-white/10 bg-white/5 text-ink-100"
                       )}
                     >
-                      {m.text}
+                      {
+                        m.text
+                      }
                     </div>
                   )}
 
-                  {/* ⭐ تنبيه + زر إكمال عند انقطاع الشرح */}
+                  {/* تنبيه القطع */}
 
                   {m.role ===
                     "assistant" &&
                     m.truncated && (
                       <div className="mt-1.5 flex items-center justify-between gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2">
+
                         <span className="text-[11px] font-semibold text-amber-300">
                           الشرح توقف قبل اكتماله
                         </span>
@@ -1083,14 +1800,24 @@ export default function AiChatWidget() {
                         >
                           أكمل الشرح
                         </button>
+
                       </div>
                     )}
+
+                  {/* تقييم */}
 
                   {m.role ===
                     "assistant" &&
                     m.text &&
-                    i > 0 && (
+                    i > 0 &&
+                    !(
+                      loading &&
+                      i ===
+                        messages.length -
+                          1
+                    ) && (
                       <div className="mt-1 flex items-center gap-1.5">
+
                         <button
                           type="button"
                           onClick={() =>
@@ -1108,7 +1835,11 @@ export default function AiChatWidget() {
                           aria-label="رد مفيد"
                           title="رد مفيد"
                         >
-                          <ThumbsUp size={12} />
+                          <ThumbsUp
+                            size={
+                              12
+                            }
+                          />
                         </button>
 
                         <button
@@ -1128,13 +1859,21 @@ export default function AiChatWidget() {
                           aria-label="رد غير مفيد"
                           title="رد غير مفيد"
                         >
-                          <ThumbsDown size={12} />
+                          <ThumbsDown
+                            size={
+                              12
+                            }
+                          />
                         </button>
+
                       </div>
                     )}
+
                 </div>
               )
             )}
+
+            {/* انتظار أول قطعة */}
 
             {loading &&
               messages[
@@ -1142,19 +1881,49 @@ export default function AiChatWidget() {
                   1
               ]?.role ===
                 "assistant" &&
+              !messages[
+                messages.length -
+                  1
+              ]?.text && (
+                <div className="ml-auto flex items-center gap-2 rounded-2xl rounded-tl-sm border border-white/10 bg-white/5 px-3.5 py-2.5 text-xs text-ink-300">
+
+                  <Loader2
+                    size={
+                      14
+                    }
+                    className="animate-spin text-gold-400"
+                  />
+
+                  المعلم يفكر...
+
+                </div>
+              )}
+
+            {/* مؤشر أثناء استمرار Streaming بعد ظهور النص */}
+
+            {loading &&
               messages[
                 messages.length -
                   1
-              ]?.text ===
-                "" && (
-                <div className="ml-auto flex items-center gap-2 rounded-2xl rounded-tl-sm border border-white/10 bg-white/5 px-3.5 py-2.5 text-xs text-ink-300">
+              ]?.role ===
+                "assistant" &&
+              Boolean(
+                messages[
+                  messages.length -
+                    1
+                ]?.text
+              ) && (
+                <div className="ml-auto flex items-center gap-1.5 px-1 text-[10px] font-semibold text-gold-400/80">
                   <Loader2
-                    size={14}
-                    className="animate-spin text-gold-400"
+                    size={
+                      11
+                    }
+                    className="animate-spin"
                   />
-                  المعلم يفكر...
+                  يكتب...
                 </div>
               )}
+
           </div>
 
           {/* Quick actions */}
@@ -1163,8 +1932,11 @@ export default function AiChatWidget() {
             1 &&
             !loading && (
               <div className="flex flex-wrap gap-1.5 px-3 pb-1.5">
+
                 {QUICK_ACTIONS.map(
-                  (action) => (
+                  (
+                    action
+                  ) => (
                     <button
                       key={
                         action.label
@@ -1183,6 +1955,7 @@ export default function AiChatWidget() {
                     </button>
                   )
                 )}
+
               </div>
             )}
 
@@ -1190,36 +1963,51 @@ export default function AiChatWidget() {
 
           {error && (
             <div className="mx-4 mb-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300">
-              {error}
+              {
+                error
+              }
             </div>
           )}
 
           {/* Input */}
 
           <div className="border-t border-white/10 p-3">
+
             <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 p-1.5 focus-within:border-gold-500/40">
+
               <input
                 type="text"
-                value={input}
-                onChange={(e) =>
+                value={
+                  input
+                }
+                onChange={(
+                  e
+                ) =>
                   setInput(
                     e.target.value
                   )
                 }
-                onKeyDown={(e) => {
+                onKeyDown={(
+                  e
+                ) => {
                   if (
                     e.key ===
                       "Enter" &&
                     !e.shiftKey
                   ) {
                     e.preventDefault();
+
                     send();
                   }
                 }}
                 placeholder="اكتب سؤالك في القدرات اللفظية..."
                 className="flex-1 bg-transparent px-2 py-1.5 text-sm text-ink-50 outline-none placeholder:text-ink-400"
-                disabled={loading}
-                maxLength={2000}
+                disabled={
+                  loading
+                }
+                maxLength={
+                  2000
+                }
                 autoComplete="off"
               />
 
@@ -1238,19 +2026,28 @@ export default function AiChatWidget() {
               >
                 {loading ? (
                   <Loader2
-                    size={16}
+                    size={
+                      16
+                    }
                     className="animate-spin"
                   />
                 ) : (
-                  <Send size={16} />
+                  <Send
+                    size={
+                      16
+                    }
+                  />
                 )}
               </button>
+
             </div>
 
             <p className="mt-1.5 text-center text-[10px] text-ink-400">
               يجيب عن أسئلة القسم اللفظي من قدرات
             </p>
+
           </div>
+
         </div>
       )}
     </>

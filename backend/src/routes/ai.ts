@@ -4,12 +4,11 @@ import { FastifyInstance } from "fastify";
    🎓 المعلم الذكي في قُدرة — معلم شخصي متكيف وسريع
 
    ترتيب النماذج:
-   1) Gemini 3.8 Flash
-   2) Gemini 3.7 Flash
-   3) Gemini 3.6 Flash
-   4) Gemini 3.5 Flash
-   5) Gemini 3.5 Flash Lite
-   6) Gemini 3.1 Flash Lite
+   1) Qwen 3.8 Max Free
+   2) Qwen 3.7 Max Free
+   3) Qwen 3.7 Plus Free
+   4) Qwen 3.6 Plus Free
+   5) DeepSeek V4 Pro
 
    المميزات:
    - Adaptive Teaching
@@ -22,14 +21,18 @@ import { FastifyInstance } from "fastify";
    - شرح مختصر
    - شرح متقدم
    - إعادة الشرح
+   - فهم أدق لنية الطالب
+   - اختيار التفكير ديناميكياً
    - منع اختراع الأسئلة
    - منع اختراع الخيارات
    - الاعتماد على الإجابة المؤكدة
    - استيعاب المقروء
    - سؤال مشابه من البنك
+   - تقليل تكرار الأسئلة التدريبية
    - اختبار تفاعلي
    - حفظ المحادثة
    - Failover تلقائي
+   - Retry بدون reasoning عند رفضه بـ 400
    - Streaming
 
    تحسينات السرعة:
@@ -39,99 +42,54 @@ import { FastifyInstance } from "fastify";
    - عدم قراءة sections/questions مع كل رسالة
    - عدم البحث في كل بنك الأسئلة عند كل passage
    - قراءة آخر 300 محاولة للطالب فقط
-   - نفس إعداد التفكير لكل النماذج
-   - low للأسئلة العادية
-   - medium للأسئلة العميقة
-   - maxOutputTokens = 16000 (رُفع من 7000 لتفادي القطع بسبب MAX_TOKENS)
-   - timeout مستقل لكل نموذج
    - Cache لملف الطالب (90 ثانية)
    - تشغيل ملف الطالب وإحصائيات المنصة بالتوازي
-
-   ⭐ تحديث معالجة الانقطاع (finishReason):
-   - يتم الآن قراءة finishReason من كل chunk قادم من Gemini.
-   - إذا توقف النموذج بسبب MAX_TOKENS (أو أي سبب غير STOP)،
-     يُرسل هذا للواجهة الأمامية ضمن حدث done عبر الحقل truncated،
-     بدل ما تُعرض الإجابة الناقصة وكأنها مكتملة.
+   - max_tokens = 20000
+   - timeout = 30000ms
+   - stream idle timeout = 60000ms
 ========================================================= */
 
 // =========================================================
-// 🤖 نماذج Gemini
+// 🤖 النماذج
 // =========================================================
 
-const MODEL_38_FLASH = "gemini-3.8-flash";
-const MODEL_37_FLASH = "gemini-3.7-flash";
-const MODEL_36_FLASH = "gemini-3.6-flash";
-const MODEL_35_FLASH = "gemini-3.5-flash";
-const MODEL_35_FLASH_LITE = "gemini-3.5-flash-lite";
-const MODEL_31_FLASH_LITE = "gemini-3.1-flash-lite";
-
-// =========================================================
-// 📊 الحدود المحلية اليومية
-// =========================================================
-
-const MODEL_38_DAILY_CAP = Number(
-  process.env.GEMINI_38_DAILY_CAP || 20
-);
-
-const MODEL_37_DAILY_CAP = Number(
-  process.env.GEMINI_37_DAILY_CAP || 20
-);
-
-const MODEL_36_DAILY_CAP = Number(
-  process.env.GEMINI_36_DAILY_CAP || 20
-);
-
-const MODEL_35_DAILY_CAP = Number(
-  process.env.GEMINI_35_FLASH_DAILY_CAP || 20
-);
-
-const MODEL_35_LITE_DAILY_CAP = Number(
-  process.env.GEMINI_35_LITE_DAILY_CAP || 500
-);
-
-const MODEL_31_LITE_DAILY_CAP = Number(
-  process.env.GEMINI_31_LITE_DAILY_CAP || 500
-);
+const AI_MODELS = [
+  {
+    model: "qwen/qwen3.8-max:free",
+    cap: Number(
+      process.env.QWEN_38_MAX_DAILY_CAP || 500
+    ),
+  },
+  {
+    model: "qwen/qwen3.7-max:free",
+    cap: Number(
+      process.env.QWEN_37_MAX_DAILY_CAP || 500
+    ),
+  },
+  {
+    model: "qwen/qwen3.7-plus:free",
+    cap: Number(
+      process.env.QWEN_37_PLUS_DAILY_CAP || 500
+    ),
+  },
+  {
+    model: "qwen/qwen3.6-plus:free",
+    cap: Number(
+      process.env.QWEN_36_PLUS_DAILY_CAP || 500
+    ),
+  },
+  {
+    model: "deepseek/deepseek-v4-pro",
+    cap: Number(
+      process.env.DEEPSEEK_V4_PRO_DAILY_CAP || 500
+    ),
+  },
+] as const;
 
 const QUOTA_WARNING_THRESHOLD = 0.9;
 
-// =========================================================
-// 🌐 Gemini Streaming URL
-// =========================================================
-
-const GEMINI_STREAM_URL_FOR = (model: string) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
-
-// =========================================================
-// 🤖 ترتيب النماذج
-// =========================================================
-
-const GEMINI_MODELS = [
-  {
-    model: MODEL_38_FLASH,
-    cap: MODEL_38_DAILY_CAP,
-  },
-  {
-    model: MODEL_37_FLASH,
-    cap: MODEL_37_DAILY_CAP,
-  },
-  {
-    model: MODEL_36_FLASH,
-    cap: MODEL_36_DAILY_CAP,
-  },
-  {
-    model: MODEL_35_FLASH,
-    cap: MODEL_35_DAILY_CAP,
-  },
-  {
-    model: MODEL_35_FLASH_LITE,
-    cap: MODEL_35_LITE_DAILY_CAP,
-  },
-  {
-    model: MODEL_31_FLASH_LITE,
-    cap: MODEL_31_LITE_DAILY_CAP,
-  },
-] as const;
+const XKIRO_STREAM_URL =
+  "https://api.xkiro.com/v1/chat/completions";
 
 // =========================================================
 // 📊 إعدادات تحليل مستوى الطالب
@@ -165,13 +123,11 @@ interface CachedBankQuestion {
 interface QuestionIndexCache {
   at: number;
 
-  // البحث بالنص — احتياط
   questionMeta: Map<
     string,
     CachedQuestionMeta
   >;
 
-  // ⭐ البحث المباشر بالـ question.id
   questionById: Map<
     string,
     CachedBankQuestion
@@ -335,6 +291,42 @@ const DEEP_REASONING_CATEGORIES =
     "استيعاب المقروء",
     "الخطأ السياقي",
   ]);
+
+// =========================================================
+// 🧠 فهم أعمق للطلب
+// =========================================================
+
+function shouldUseDeepReasoning(
+  question: string,
+  category?: string,
+  hasPassage: boolean = false
+): boolean {
+  const q =
+    String(question || "").trim();
+
+  if (
+    category &&
+    DEEP_REASONING_CATEGORIES.has(
+      normalizeCategory(category)
+    )
+  ) {
+    return true;
+  }
+
+  if (hasPassage) {
+    return true;
+  }
+
+  if (
+    /حلل|حلّل|لماذا|ليش|قارن|استنتج|استنتاج|فسر|فسّر|اشرح بالتفصيل|بالتفصيل|ما الفرق|العلاقة|السياق|المغزى|السبب|الأدق|الأصح|ناقش/.test(
+      q
+    )
+  ) {
+    return true;
+  }
+
+  return q.length >= 1500;
+}
 
 // =========================================================
 // 🚦 Rate Limiting
@@ -1499,13 +1491,11 @@ async function buildStudentProfile(
         attempt.questionId
       ).trim();
 
-    // ⭐ أولوية البحث بالـID الحقيقي
     const cachedQuestion =
       getCachedQuestionById(
         questionId
       );
 
-    // ⭐ fallback للنص
     const meta =
       cachedQuestion
         ? {
@@ -2166,7 +2156,7 @@ export async function aiRoutes(
           pacificDateKey(),
 
         models:
-          GEMINI_MODELS.map(
+          AI_MODELS.map(
             ({
               model,
               cap,
@@ -2307,7 +2297,7 @@ export async function aiRoutes(
     ) => {
       const apiKey =
         process.env
-          .GEMINI_API_KEY;
+          .XKIRO_API_KEY;
 
       if (!apiKey) {
         return reply
@@ -2317,7 +2307,7 @@ export async function aiRoutes(
               false,
 
             message:
-              "لم يتم إعداد مفتاح الذكاء الاصطناعي.",
+              "لم يتم إعداد مفتاح الذكاء الاصطناعي XKIRO_API_KEY.",
           });
       }
 
@@ -2657,16 +2647,6 @@ export async function aiRoutes(
           );
         }
 
-        if (
-          currentCategory &&
-          DEEP_REASONING_CATEGORIES.has(
-            currentCategory
-          )
-        ) {
-          useDeepReasoning =
-            true;
-        }
-
         const validOptions =
           Array.isArray(
             cq.options
@@ -2753,6 +2733,13 @@ export async function aiRoutes(
             );
           }
         }
+
+        useDeepReasoning =
+          shouldUseDeepReasoning(
+            requestedQuestion,
+            currentCategory,
+            passage.length > 0
+          );
 
         const isReadingComprehension =
           currentCategory ===
@@ -2976,15 +2963,14 @@ export async function aiRoutes(
               ],
             });
 
-            if (
-              pending.category &&
-              DEEP_REASONING_CATEGORIES.has(
-                pending.category
-              )
-            ) {
-              useDeepReasoning =
-                true;
-            }
+            useDeepReasoning =
+              shouldUseDeepReasoning(
+                question,
+                pending.category,
+                Boolean(
+                  pending.passage
+                )
+              );
 
             if (
               pending.category
@@ -3031,11 +3017,20 @@ export async function aiRoutes(
             currentCategory =
               effectiveCategory;
 
+            const pendingQuestion =
+              getPendingQuiz(
+                userId
+              );
+
+            const exclusionText =
+              currentQuestionText ||
+              pendingQuestion?.question;
+
             const bank =
               await fetchSimilarQuestion(
                 app,
                 effectiveCategory,
-                currentQuestionText
+                exclusionText
               );
 
             if (
@@ -3167,15 +3162,12 @@ export async function aiRoutes(
                   );
                 }
 
-                if (
-                  bank.category &&
-                  DEEP_REASONING_CATEGORIES.has(
-                    bank.category
-                  )
-                ) {
-                  useDeepReasoning =
-                    true;
-                }
+                useDeepReasoning =
+                  shouldUseDeepReasoning(
+                    question,
+                    bank.category,
+                    bankPassage.length > 0
+                  );
               }
             } else {
               contents.push({
@@ -3195,6 +3187,12 @@ export async function aiRoutes(
               currentCategory ||
               lastCategoryStore.get(
                 userId
+              );
+
+            useDeepReasoning =
+              shouldUseDeepReasoning(
+                question,
+                currentCategory
               );
 
             contents.push({
@@ -3377,6 +3375,9 @@ ${internalProfile.weaknesses.join(
       ) {
         dynamicSystemPrompt +=
           REEXPLAIN_INSTRUCTION;
+
+        useDeepReasoning =
+          true;
       }
 
       // =====================================================
@@ -3425,7 +3426,7 @@ ${internalProfile.weaknesses.join(
 `;
 
       // =====================================================
-      // ⚙️ Generation Config
+      // ⚙️ إعدادات التوليد
       // =====================================================
 
       const thinkingLevel =
@@ -3433,38 +3434,82 @@ ${internalProfile.weaknesses.join(
           useDeepReasoning
         );
 
-      // ⭐ الحد الأقصى للإخراج رُفع إلى 16000 لتفادي القطع
-      // بسبب استهلاك توكنز التفكير الداخلي (thinking) من نفس
-      // ميزانية maxOutputTokens.
       const MAX_OUTPUT_TOKENS =
         Number(
           process.env
-            .GEMINI_MAX_OUTPUT_TOKENS ||
-            16000
+            .AI_MAX_OUTPUT_TOKENS ||
+            20000
         );
 
-      const generationConfig = {
-        maxOutputTokens:
-          MAX_OUTPUT_TOKENS,
+      // =====================================================
+      // 📨 OpenAI-compatible Messages
+      // =====================================================
 
-        thinkingConfig: {
-          thinkingLevel,
-        },
-      };
+      const messages: Array<{
+        role:
+          | "system"
+          | "user"
+          | "assistant";
+        content: string;
+      }> = [
+        {
+          role:
+            "system",
 
-      const payload = {
-        contents,
-
-        systemInstruction: {
-          parts: [
-            {
-              text:
-                dynamicSystemPrompt,
-            },
-          ],
+          content:
+            dynamicSystemPrompt,
         },
 
-        generationConfig,
+        ...contents.map(
+          (message) => ({
+            role:
+              message.role ===
+              "model"
+                ? "assistant" as const
+                : "user" as const,
+
+            content:
+              message.parts
+                .map(
+                  (part) =>
+                    String(
+                      part?.text ||
+                        ""
+                    )
+                )
+                .join(
+                  "\n"
+                ),
+          })
+        ),
+      ];
+
+      const buildPayload = (
+        model: string,
+        includeReasoning: boolean
+      ) => {
+        const payload: any = {
+          model,
+
+          messages,
+
+          stream:
+            true,
+
+          max_tokens:
+            MAX_OUTPUT_TOKENS,
+        };
+
+        if (
+          includeReasoning
+        ) {
+          payload.reasoning = {
+            effort:
+              thinkingLevel,
+          };
+        }
+
+        return payload;
       };
 
       // =====================================================
@@ -3482,7 +3527,7 @@ ${internalProfile.weaknesses.join(
         const {
           model,
           cap,
-        } of GEMINI_MODELS
+        } of AI_MODELS
       ) {
         if (
           isModelAtCap(
@@ -3491,7 +3536,7 @@ ${internalProfile.weaknesses.join(
           )
         ) {
           console.warn(
-            `[Gemini quota] ${model} وصل للحد اليومي: ${getUsage(
+            `[AI quota] ${model} وصل للحد اليومي: ${getUsage(
               model
             )}/${cap}`
           );
@@ -3506,7 +3551,7 @@ ${internalProfile.weaknesses.join(
           )
         ) {
           console.warn(
-            `[Gemini quota] ${model} اقترب من الحد: ${getUsage(
+            `[AI quota] ${model} اقترب من الحد: ${getUsage(
               model
             )}/${cap}`
           );
@@ -3518,9 +3563,7 @@ ${internalProfile.weaknesses.join(
           cap,
 
           url:
-            GEMINI_STREAM_URL_FOR(
-              model
-            ),
+            XKIRO_STREAM_URL,
         });
       }
 
@@ -3546,22 +3589,20 @@ ${internalProfile.weaknesses.join(
       const MODEL_TIMEOUT_MS =
         Number(
           process.env
-            .GEMINI_REQUEST_TIMEOUT_MS ||
-            12000
+            .AI_REQUEST_TIMEOUT_MS ||
+            30000
         );
 
-      // ⭐ رفعنا مهلة خمول الـStreaming إلى 60 ثانية
       const STREAM_IDLE_TIMEOUT_MS =
         Number(
           process.env
-            .GEMINI_STREAM_IDLE_TIMEOUT_MS ||
+            .AI_STREAM_IDLE_TIMEOUT_MS ||
             60000
         );
 
       let fullAssistantText =
         "";
 
-      // ⭐ آخر finishReason شوهد أثناء الستريم (لمعرفة سبب التوقف)
       let lastFinishReason:
         string | null = null;
 
@@ -3610,7 +3651,6 @@ ${internalProfile.weaknesses.join(
         null =
         null;
 
-      // ⭐ إلغاء آمن عند إغلاق استجابة العميل
       const abortActiveRequest =
         () => {
           if (
@@ -3629,7 +3669,6 @@ ${internalProfile.weaknesses.join(
           }
         };
 
-      // ⭐ مهم: الاستماع على response وليس request
       reply.raw.once(
         "close",
         abortActiveRequest
@@ -3648,139 +3687,165 @@ ${internalProfile.weaknesses.join(
           const candidate of
             candidates
         ) {
-          const controller =
-            new AbortController();
+          let includeReasoning =
+            true;
 
-          const timeout =
-            setTimeout(
-              () =>
-                controller.abort(),
-              MODEL_TIMEOUT_MS
-            );
+          let retriedWithoutReasoning =
+            false;
 
-          try {
-            const requestStartedAt =
-              Date.now();
+          while (true) {
+            const controller =
+              new AbortController();
 
-            console.log(
-              `[Gemini] تجربة ${candidate.model} | thinking=${thinkingLevel} | usage=${getUsage(
-                candidate.model
-              )}/${candidate.cap}`
-            );
-
-            const response =
-              await fetch(
-                candidate.url,
-
-                {
-                  method:
-                    "POST",
-
-                  headers: {
-                    "Content-Type":
-                      "application/json",
-
-                    "Accept":
-                      "text/event-stream",
-
-                    "x-goog-api-key":
-                      apiKey,
-                  },
-
-                  body:
-                    JSON.stringify(
-                      payload
-                    ),
-
-                  signal:
-                    controller.signal,
-                }
+            const timeout =
+              setTimeout(
+                () =>
+                  controller.abort(),
+                MODEL_TIMEOUT_MS
               );
 
-            clearTimeout(
-              timeout
-            );
+            try {
+              const requestStartedAt =
+                Date.now();
 
-            console.log(
-              `[Gemini] HTTP ${response.status} via ${candidate.model} in ${
-                Date.now() -
-                requestStartedAt
-              }ms`
-            );
+              console.log(
+                `[AI] تجربة ${candidate.model} | thinking=${thinkingLevel} | reasoning=${includeReasoning ? "on" : "off"} | usage=${getUsage(
+                  candidate.model
+                )}/${candidate.cap}`
+              );
 
-            if (
-              response.ok
-            ) {
-              upstream =
-                response;
+              const response =
+                await fetch(
+                  candidate.url,
 
-              chosen =
-                candidate;
+                  {
+                    method:
+                      "POST",
 
-              activeController =
-                controller;
+                    headers: {
+                      "Content-Type":
+                        "application/json",
+
+                      "Accept":
+                        "text/event-stream",
+
+                      "Authorization":
+                        `Bearer ${apiKey}`,
+                    },
+
+                    body:
+                      JSON.stringify(
+                        buildPayload(
+                          candidate.model,
+                          includeReasoning
+                        )
+                      ),
+
+                    signal:
+                      controller.signal,
+                  }
+                );
+
+              clearTimeout(
+                timeout
+              );
+
+              console.log(
+                `[AI] HTTP ${response.status} via ${candidate.model} in ${
+                  Date.now() -
+                  requestStartedAt
+                }ms`
+              );
+
+              if (
+                response.ok
+              ) {
+                upstream =
+                  response;
+
+                chosen =
+                  candidate;
+
+                activeController =
+                  controller;
+
+                break;
+              }
+
+              let errorMessage =
+                response.statusText;
+
+              try {
+                const errorBody =
+                  await response.json() as any;
+
+                errorMessage =
+                  errorBody
+                    ?.error
+                    ?.message ||
+                  errorBody
+                    ?.message ||
+                  errorMessage;
+              } catch {
+                // لا شيء
+              }
+
+              lastErrMsg =
+                `${response.status} ${errorMessage}`;
+
+              console.error(
+                `[AI] ❌ فشل ${candidate.model}: ${lastErrMsg}`
+              );
+
+              // =============================================
+              // reasoning غير مدعوم:
+              // أعد نفس النموذج مرة واحدة بدون reasoning
+              // =============================================
+
+              if (
+                response.status ===
+                  400 &&
+                includeReasoning &&
+                !retriedWithoutReasoning
+              ) {
+                retriedWithoutReasoning =
+                  true;
+
+                includeReasoning =
+                  false;
+
+                console.warn(
+                  `[AI] إعادة ${candidate.model} بدون reasoning بسبب HTTP 400`
+                );
+
+                continue;
+              }
+
+              break;
+            } catch (error: any) {
+              clearTimeout(
+                timeout
+              );
+
+              lastErrMsg =
+                error?.name ===
+                "AbortError"
+                  ? "Request timeout"
+                  : error?.message ||
+                    "fetch error";
+
+              console.error(
+                `[AI] ❌ خطأ ${candidate.model}: ${lastErrMsg}`
+              );
 
               break;
             }
+          }
 
-            let errorMessage =
-              response.statusText;
-
-            try {
-              const errorBody =
-                await response.json();
-
-              errorMessage =
-                errorBody
-                  ?.error
-                  ?.message ||
-                errorMessage;
-            } catch {
-              // لا شيء
-            }
-
-            lastErrMsg =
-              `${response.status} ${errorMessage}`;
-
-            console.error(
-              `[Gemini] ❌ فشل ${candidate.model}: ${lastErrMsg}`
-            );
-
-            if (
-              response.status ===
-                408 ||
-              response.status ===
-                429 ||
-              response.status ===
-                500 ||
-              response.status ===
-                502 ||
-              response.status ===
-                503 ||
-              response.status ===
-                504
-            ) {
-              continue;
-            }
-
+          if (
+            upstream
+          ) {
             break;
-          } catch (error: any) {
-            clearTimeout(
-              timeout
-            );
-
-            lastErrMsg =
-              error?.name ===
-              "AbortError"
-                ? "Request timeout"
-                : error?.message ||
-                  "fetch error";
-
-            console.error(
-              `[Gemini] ❌ خطأ ${candidate.model}: ${lastErrMsg}`
-            );
-
-            continue;
           }
         }
 
@@ -3816,7 +3881,7 @@ ${internalProfile.weaknesses.join(
           );
 
         console.log(
-          `[Gemini usage] ${chosen.model}: ${newUsage}/${chosen.cap}`
+          `[AI usage] ${chosen.model}: ${newUsage}/${chosen.cap}`
         );
 
         console.log(
@@ -3869,7 +3934,6 @@ ${internalProfile.weaknesses.join(
           }
         );
 
-        // ⭐ Newline حقيقي حسب SSE
         reply.raw.write(
           ": connected\n\n"
         );
@@ -3893,19 +3957,18 @@ ${internalProfile.weaknesses.join(
           false;
 
         // =================================================
-        // 🧩 معالجة chunk واحد قادم من Gemini
-        // (يستخرج النص ويلتقط finishReason)
+        // 🧩 معالجة chunk واحد
         // =================================================
 
         const handleParsedChunk = (
           chunk: any
         ) => {
-          const candidate =
+          const choice =
             chunk
-              ?.candidates?.[0];
+              ?.choices?.[0];
 
           const finishReason =
-            candidate?.finishReason;
+            choice?.finish_reason;
 
           if (
             typeof finishReason ===
@@ -3916,57 +3979,58 @@ ${internalProfile.weaknesses.join(
 
             if (
               finishReason !==
-              "STOP"
+                "stop" &&
+              finishReason !==
+                "STOP"
             ) {
               console.warn(
-                `[Gemini] finishReason غير طبيعي عبر ${chosen.model}: ${finishReason}`
+                `[AI] finishReason غير طبيعي عبر ${chosen.model}: ${finishReason}`
               );
             }
           }
 
-          const parts =
-            candidate
-              ?.content
-              ?.parts;
+          const deltaContent =
+            choice
+              ?.delta
+              ?.content;
+
+          const fallbackText =
+            choice
+              ?.text;
+
+          const piece =
+            typeof deltaContent ===
+              "string"
+              ? deltaContent
+              : typeof fallbackText ===
+                  "string"
+                ? fallbackText
+                : "";
 
           if (
-            !Array.isArray(
-              parts
-            )
+            !piece
           ) {
             return;
           }
 
-          for (
-            const part of
-              parts
-          ) {
-            const piece =
-              part?.text;
+          emitted =
+            true;
 
-            if (
-              typeof piece !==
-                "string" ||
-              !piece
-            ) {
-              continue;
-            }
+          fullAssistantText +=
+            piece;
 
-            emitted =
-              true;
-
-            fullAssistantText +=
-              piece;
-
-            reply.raw.write(
-              `data: ${JSON.stringify(
-                {
-                  piece,
-                }
-              )}\n\n`
-            );
-          }
+          reply.raw.write(
+            `data: ${JSON.stringify(
+              {
+                piece,
+              }
+            )}\n\n`
+          );
         };
+
+        // =================================================
+        // Streaming loop
+        // =================================================
 
         while (true) {
           if (streamIdleTimer) {
@@ -4130,10 +4194,11 @@ ${internalProfile.weaknesses.join(
         // النهاية
         // ===================================================
 
-        // ⭐ هل توقف النموذج بسبب استنفاد الحد الأقصى للتوكنز؟
         const truncatedByMaxTokens =
           lastFinishReason ===
-          "MAX_TOKENS";
+            "length" ||
+          lastFinishReason ===
+            "MAX_TOKENS";
 
         if (
           !emitted
@@ -4158,8 +4223,6 @@ ${internalProfile.weaknesses.join(
 
                 thinkingLevel,
 
-                // ⭐ جديد: تُعلم الواجهة الأمامية أن الإجابة
-                // توقفت قبل اكتمالها بسبب حد التوكنز.
                 truncated:
                   truncatedByMaxTokens,
 
@@ -4175,7 +4238,7 @@ ${internalProfile.weaknesses.join(
           truncatedByMaxTokens
         ) {
           console.warn(
-            `[Gemini] الإجابة توقفت بسبب MAX_TOKENS | user=${userId} | model=${chosen.model} | maxOutputTokens=${MAX_OUTPUT_TOKENS} | thinking=${thinkingLevel}`
+            `[AI] الإجابة توقفت بسبب حد التوكنز | user=${userId} | model=${chosen.model} | maxOutputTokens=${MAX_OUTPUT_TOKENS} | thinking=${thinkingLevel}`
           );
         }
       } catch (error: any) {
@@ -4225,7 +4288,6 @@ ${internalProfile.weaknesses.join(
             null;
         }
 
-        // ⭐ مهم: إزالة listener من response
         reply.raw.removeListener(
           "close",
           abortActiveRequest
