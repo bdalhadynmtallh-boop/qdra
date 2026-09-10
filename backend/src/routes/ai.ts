@@ -55,16 +55,16 @@ import { FastifyInstance } from "fastify";
 
 const AI_MODELS = [
   {
-    model: "deepseek/deepseek-v4-pro",
-    url: "https://api.xkiro.com/v1/chat/completions",
-    apiKeyEnv: "XKIRO_API_KEY",
-    cap: Number(process.env.DEEPSEEK_V4_PRO_DAILY_CAP || 500),
-  },
-  {
     model: "moonshotai/kimi-k3",
     url: "https://integrate.api.nvidia.com/v1/chat/completions",
     apiKeyEnv: "NVIDIA_API_KEY",
     cap: Number(process.env.KIMI_K3_DAILY_CAP || 500),
+  },
+  {
+   model: "deepseek/deepseek-v4-pro",
+    url: "https://api.xkiro.com/v1/chat/completions",
+    apiKeyEnv: "XKIRO_API_KEY",
+    cap: Number(process.env.DEEPSEEK_V4_PRO_DAILY_CAP || 500),
   },
   {
     model: "qwen/qwen3.8-max:free",
