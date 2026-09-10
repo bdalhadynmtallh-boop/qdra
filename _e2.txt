@@ -1,0 +1,3 @@
+import { aiAdminRoutes } from "./routes/aiAdmin.js";
+await app.register(aiAdminRoutes, {
+FINDSTR: /c ignored

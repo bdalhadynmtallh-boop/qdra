@@ -839,11 +839,11 @@ export default function App() {
     setAiSaveLoading(true);
     try {
       const res = await api.put("/api/admin/ai/settings", {
-        aiEnabled: aiSettings.aiEnabled,
-        aiModel: aiSettings.aiModel,
-        aiDailyLimit: Number(aiSettings.aiDailyLimit),
-        aiHourlyLimit: Number(aiSettings.aiHourlyLimit),
-        aiMaintenanceMessage: aiSettings.aiMaintenanceMessage,
+        enabled: aiSettings.enabled,
+        model: aiSettings.model,
+        dailyLimit: Number(aiSettings.dailyLimit),
+        hourlyLimit: Number(aiSettings.hourlyLimit),
+        maintenanceMessage: aiSettings.maintenanceMessage,
       });
       setAiSettings(res.data.settings || aiSettings);
       showToast(res.data.message || "تم حفظ إعدادات المعلم الذكي بنجاح");
@@ -1082,6 +1082,10 @@ export default function App() {
       } finally {
 
         setLoadingData(false);
+
+        // تحميل إعدادات المعلم الذكي والإحصائيات مسبقاً
+        fetchAiSettings();
+        fetchAiStats();
 
       }
     };
@@ -5057,10 +5061,10 @@ export default function App() {
                   }}
                 >
                   {[
-                    { label: "طلبات اليوم", value: aiStats?.todayRequests ?? 0 },
-                    { label: "الطلبات (آخر ساعة)", value: aiStats?.lastHourRequests ?? 0 },
-                    { label: "مستخدمو اليوم", value: aiStats?.todayUsers ?? 0 },
-                    { label: "مرفوضة (Rate Limit)", value: aiStats?.rejectedRateLimit ?? 0 },
+                    { label: "طلبات اليوم", value: aiStats?.dayRequests ?? 0 },
+                    { label: "الطلبات (آخر ساعة)", value: aiStats?.hourRequests ?? 0 },
+                    { label: "مستخدمو اليوم", value: aiStats?.dayUsers ?? 0 },
+                    { label: "مرفوضة (Rate Limit)", value: aiStats?.dayRejected ?? 0 },
                   ].map((stat) => (
                     <div key={stat.label} style={{ padding: "14px 12px", borderRadius: 14, background: COLORS.bgPanelAlt, border: `1px solid ${COLORS.border}` }}>
                       <div style={{ fontSize: 12, color: COLORS.textMuted }}>{stat.label}</div>
@@ -5072,12 +5076,12 @@ export default function App() {
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginTop: 12 }}>
                   <div style={{ padding: "14px 12px", borderRadius: 14, background: COLORS.bgPanelAlt, border: `1px solid ${COLORS.border}` }}>
                     <div style={{ fontSize: 12, color: COLORS.textMuted }}>الموديل الحالي</div>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.gold, marginTop: 6 }}>{aiSettings?.aiModel || "—"}</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.gold, marginTop: 6 }}>{aiSettings?.model || "—"}</div>
                   </div>
                   <div style={{ padding: "14px 12px", borderRadius: 14, background: COLORS.bgPanelAlt, border: `1px solid ${COLORS.border}` }}>
                     <div style={{ fontSize: 12, color: COLORS.textMuted }}>حالة الخدمة</div>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: aiSettings?.aiEnabled ? COLORS.success : COLORS.danger, marginTop: 6 }}>
-                      {aiSettings?.aiEnabled ? "🟢 يعمل" : "🔴 وضع الصيانة"}
+                    <div style={{ fontSize: 16, fontWeight: 800, color: aiSettings?.enabled ? COLORS.success : COLORS.danger, marginTop: 6 }}>
+                      {aiSettings?.enabled ? "🟢 يعمل" : "🔴 وضع الصيانة"}
                     </div>
                   </div>
                 </div>
@@ -5093,12 +5097,12 @@ export default function App() {
                   <button
                     type="button"
                     className="qd-btn"
-                    style={aiSettings?.aiEnabled ? {
+                    style={aiSettings?.enabled ? {
                       background: "rgba(69,212,154,.14)",
                       borderColor: COLORS.success,
                       color: COLORS.success,
                     } : undefined}
-                    onClick={() => setAiSettings({ ...aiSettings, aiEnabled: true })}
+                    onClick={() => setAiSettings({ ...aiSettings, enabled: true })}
                   >
                     🟢 يعمل
                   </button>
@@ -5106,12 +5110,12 @@ export default function App() {
                   <button
                     type="button"
                     className="qd-btn"
-                    style={!aiSettings?.aiEnabled ? {
+                    style={!aiSettings?.enabled ? {
                       background: "rgba(255,116,124,.14)",
                       borderColor: COLORS.danger,
                       color: COLORS.danger,
                     } : undefined}
-                    onClick={() => setAiSettings({ ...aiSettings, aiEnabled: false })}
+                    onClick={() => setAiSettings({ ...aiSettings, enabled: false })}
                   >
                     🔴 وضع الصيانة
                   </button>
@@ -5127,17 +5131,17 @@ export default function App() {
                 <select
                   className="qd-field"
                   dir="ltr"
-                  value={aiSettings?.aiModel || ""}
+                  value={aiSettings?.model || ""}
                   onChange={(e) =>
                     setAiSettings({
                       ...aiSettings,
-                      aiModel: e.target.value,
+                      model: e.target.value,
                     })
                   }
                   style={{ width: "100%", padding: "13px 15px", borderRadius: 12, marginTop: 8 }}
                 >
                   {aiSettings?.availableModels?.map((m: any) => (
-                    <option key={m.id} value={m.id}>
+                    <option key={m.model} value={m.model}>
                       {m.label}
                     </option>
                   ))}
@@ -5157,11 +5161,11 @@ export default function App() {
                       type="number"
                       min={1}
                       className="qd-field"
-                      value={aiSettings?.aiDailyLimit ?? 20}
+                      value={aiSettings?.dailyLimit ?? 20}
                       onChange={(e) =>
                         setAiSettings({
                           ...aiSettings,
-                          aiDailyLimit: Number(e.target.value),
+                          dailyLimit: Number(e.target.value),
                         })
                       }
                       style={{ width: "100%", padding: "13px 15px", borderRadius: 12 }}
@@ -5175,11 +5179,11 @@ export default function App() {
                       min={1}
                       className="qd-field"
                       dir="ltr"
-                      value={aiSettings?.aiHourlyLimit ?? 30}
+                      value={aiSettings?.hourlyLimit ?? 30}
                       onChange={(e) =>
                         setAiSettings({
                           ...aiSettings,
-                          aiHourlyLimit: Number(e.target.value),
+                          hourlyLimit: Number(e.target.value),
                         })
                       }
                       style={{ width: "100%", padding: "13px 15px", borderRadius: 12 }}
@@ -5198,11 +5202,11 @@ export default function App() {
                   className="qd-field"
                   rows={4}
                   dir="rtl"
-                  value={aiSettings?.aiMaintenanceMessage || ""}
+                  value={aiSettings?.maintenanceMessage || ""}
                   onChange={(e) =>
                     setAiSettings({
                       ...aiSettings,
-                      aiMaintenanceMessage: e.target.value,
+                      maintenanceMessage: e.target.value,
                     })
                   }
                   style={{ width: "100%", padding: "13px 15px", borderRadius: 12, minHeight: 110, marginTop: 8 }}

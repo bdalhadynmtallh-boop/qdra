@@ -1,0 +1,11 @@
+START  
+YES backend\src\routes\aiAdmin.ts
+END 
+YES backend\src\services\aiSettings.ts
+END 
+YES backend\src\services\aiActivity.ts
+END 
+YES backend\src\routes\ai.ts
+END 
+YES backend\prisma\schema.prisma
+END 

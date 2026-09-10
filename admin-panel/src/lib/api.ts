@@ -238,21 +238,22 @@ export async function getActivities(params?: {
 // AI SETTINGS (ط§ظ„ظ…ط¹ظ„ظ… ط§ظ„ط°ظƒظٹ)
 // ============================================================
 export interface AiSettings {
-  aiEnabled: boolean;
-  aiModel: string;
-  aiDailyLimit: number;
-  aiHourlyLimit: number;
-  aiMaintenanceMessage: string;
-  availableModels: { id: string; label: string }[];
+  enabled: boolean;
+  model: string;
+  dailyLimit: number;
+  hourlyLimit: number;
+  maintenanceMessage: string;
+  availableModels: { model: string; label: string; cap: number }[];
 }
 export interface AiStats {
-  todayRequests: number;
-  lastHourRequests: number;
-  todayUsers: number;
-  rejectedRateLimit: number;
+  dateKey: string;
+  dayRequests: number;
+  hourRequests: number;
+  dayUsers: number;
+  dayRejected: number;
+  hourRejected: number;
   currentModel: string;
-  aiEnabled: boolean;
-  aiMaintenanceMessage: string;
+  enabled: boolean;
 }
 export async function getAiSettings() {
   return adminFetch<{ success: boolean; settings: AiSettings }>('/admin/ai/settings');
