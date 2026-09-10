@@ -2702,6 +2702,26 @@ export default function App() {
           <button
             type="button"
 
+            onClick={() => {
+              navigate("aiSettings");
+              fetchAiSettings();
+            }}
+
+            className="qd-btn qd-btn-gold"
+
+            style={{
+              padding:
+                "8px 14px",
+
+              minHeight: 39,
+            }}
+          >
+            🤖 المعلم الذكي
+          </button>
+
+          <button
+            type="button"
+
             onClick={
               handleLogout
             }

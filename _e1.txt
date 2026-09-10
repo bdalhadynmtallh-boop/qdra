@@ -1,9 +1,0 @@
-} from "../services/aiSettings.js";
-      const aiSettings =
-      if (!aiSettings.enabled) {
-              aiSettings.maintenanceMessage,
-          aiSettings.hourlyLimit
-        aiSettings.dailyLimit
-            aiSettings.model
-            aiSettings.model
-FINDSTR: /c ignored
