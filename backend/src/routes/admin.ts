@@ -43,7 +43,7 @@ function generateActivationCode(): string {
 // ADMIN ACTIVITY LOGGER
 // ============================================================
 
-async function logAdminActivity(
+export async function logAdminActivity(
   app: FastifyInstance,
   request: any,
   data: AdminActivityBody

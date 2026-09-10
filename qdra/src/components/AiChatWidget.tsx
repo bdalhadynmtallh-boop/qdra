@@ -24,6 +24,12 @@ import {
 } from "../utils/cn";
 
 /* =========================================================
+   🛠️ خطأ الصيانة
+========================================================= */
+
+class AiMaintenanceError extends Error {}
+
+/* =========================================================
    🌐 رابط الـ API
 ========================================================= */
 
@@ -183,6 +189,13 @@ export default function AiChatWidget() {
   const [
     error,
     setError,
+  ] = useState<
+    string | null
+  >(null);
+
+  const [
+    maintenanceMessage,
+    setMaintenanceMessage,
   ] = useState<
     string | null
   >(null);
@@ -500,6 +513,10 @@ export default function AiChatWidget() {
           null
         );
 
+        setMaintenanceMessage(
+          null
+        );
+
         abortControllerRef.current?.abort();
 
         const controller =
@@ -585,6 +602,34 @@ export default function AiChatWidget() {
           ) {
             throw new Error(
               "ليس لديك صلاحية لاستخدام المعلم الذكي."
+            );
+          }
+
+          if (
+            res.status ===
+            503
+          ) {
+            const errorData =
+              await res
+                .json()
+                .catch(
+                  () =>
+                    null
+                );
+
+            // 🛠️ وضع الصيانة: نعرض رسالة الصيانة التي حددها الأدمن
+            if (
+              errorData?.maintenance
+            ) {
+              throw new AiMaintenanceError(
+                errorData?.message ||
+                  "🛠️ المعلم الذكي تحت الصيانة حالياً، نعمل على تحسين الخدمة وسيعود قريباً."
+              );
+            }
+
+            throw new Error(
+              errorData?.message ||
+                "الخدمة غير متاحة حالياً. حاول مرة أخرى لاحقاً."
             );
           }
 
@@ -1144,6 +1189,59 @@ export default function AiChatWidget() {
             "❌ AI REQUEST ERROR:",
             err
           );
+
+          // 🛠️ وضع الصيانة: رسالة الصيانة تظهر داخل نافذة المحادثة
+          if (
+            err instanceof
+              AiMaintenanceError
+          ) {
+            const text =
+              err.message;
+
+            // نحذف الرسالة الفارغة (placeholder) إن وجدت ثم نضيف رسالة الصيانة
+            const base =
+              [...messagesRef.current];
+
+            const last =
+              base[
+                base.length -
+                  1
+              ];
+
+            if (
+              last?.role ===
+                "assistant" &&
+              !last.text
+            ) {
+              base.pop();
+            }
+
+            messagesRef.current =
+              [
+                ...base,
+
+                {
+                  role:
+                    "assistant",
+
+                  text,
+                },
+              ];
+
+            setMessages(
+              messagesRef.current
+            );
+
+            setMaintenanceMessage(
+              text
+            );
+
+            setError(
+              null
+            );
+
+            return;
+          }
 
           const message =
             err instanceof
@@ -1708,11 +1806,24 @@ export default function AiChatWidget() {
                 </div>
 
                 <div className="flex items-center gap-1.5 text-[10px] font-semibold text-emerald-400">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
 
-                  {loading
-                    ? "يفكر الآن..."
-                    : "جاهز للإجابة"}
+                  {maintenanceMessage ? (
+                    <>
+                      <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+
+                      <span className="text-red-300">
+                        تحت الصيانة
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+
+                      {loading
+                        ? "يفكر الآن..."
+                        : "جاهز للإجابة"}
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1966,6 +2077,14 @@ export default function AiChatWidget() {
               {
                 error
               }
+            </div>
+          )}
+
+          {/* 🛠️ بانر الصيانة */}
+
+          {maintenanceMessage && (
+            <div className="mx-4 mb-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-semibold text-amber-300">
+              🛠️ المعلم الذكي تحت الصيانة حالياً — لن تصل إجابات جديدة حتى يعود للعمل.
             </div>
           )}
 

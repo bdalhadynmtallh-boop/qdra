@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.VITE_API_URL || "https://qdra-1.onrender.com";
+﻿const BASE_URL = import.meta.env.VITE_API_URL || "https://qdra-1.onrender.com";
 
 // ============================================================
 // BASE FETCH FUNCTION
@@ -20,7 +20,7 @@ export async function adminFetch<T = any>(
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(data?.message || `خطأ في الطلب (${response.status})`);
+    throw new Error(data?.message || `ط®ط·ط£ ظپظٹ ط§ظ„ط·ظ„ط¨ (${response.status})`);
   }
 
   return data;
@@ -233,4 +233,44 @@ export async function getActivities(params?: {
     activities: any[];
     pagination: any;
   }>(`/admin/activities${qs ? `?${qs}` : ""}`);
+}
+// ============================================================
+// AI SETTINGS (ط§ظ„ظ…ط¹ظ„ظ… ط§ظ„ط°ظƒظٹ)
+// ============================================================
+export interface AiSettings {
+  aiEnabled: boolean;
+  aiModel: string;
+  aiDailyLimit: number;
+  aiHourlyLimit: number;
+  aiMaintenanceMessage: string;
+  availableModels: { id: string; label: string }[];
+}
+export interface AiStats {
+  todayRequests: number;
+  lastHourRequests: number;
+  todayUsers: number;
+  rejectedRateLimit: number;
+  currentModel: string;
+  aiEnabled: boolean;
+  aiMaintenanceMessage: string;
+}
+export async function getAiSettings() {
+  return adminFetch<{ success: boolean; settings: AiSettings }>('/admin/ai/settings');
+}
+export async function updateAiSettings(
+  data: Partial<{
+    aiEnabled: boolean;
+    aiModel: string;
+    aiDailyLimit: number;
+    aiHourlyLimit: number;
+    aiMaintenanceMessage: string;
+  }>
+) {
+  return adminFetch<{ success: boolean; settings: AiSettings; message: string }>('/admin/ai/settings', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+export async function getAiStats() {
+  return adminFetch<{ success: boolean; stats: AiStats }>('/admin/ai/stats');
 }

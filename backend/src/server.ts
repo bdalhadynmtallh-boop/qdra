@@ -16,6 +16,7 @@ import { sectionRoutes } from "./routes/sections.js";
 import { authRoutes } from "./routes/auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { adminRoutes } from "./routes/admin.js";
+import { aiAdminRoutes } from "./routes/aiAdmin.js";
 import { progressRoutes } from "./routes/progress.js";
 import { simulatorRoutes } from "./routes/simulator.js";
 import { pdfRoutes } from "./routes/pdfs.js";
@@ -156,6 +157,10 @@ const sensitiveRateLimit = {
 await app.register(sectionRoutes, { prefix: "/api" });
 await app.register(authRoutes, { prefix: "/api/auth" });
 await app.register(adminRoutes, {
+  prefix: "/api/admin",
+  config: { rateLimit: sensitiveRateLimit },
+});
+await app.register(aiAdminRoutes, {
   prefix: "/api/admin",
   config: { rateLimit: sensitiveRateLimit },
 });

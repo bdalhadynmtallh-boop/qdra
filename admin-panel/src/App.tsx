@@ -89,7 +89,7 @@ interface StatsType {
   suspendedUsers: number;
 }
 
-type Page = "dashboard" | "users" | "codes" | "sections" | "activities" | "sessions";
+type Page = "dashboard" | "users" | "codes" | "sections" | "activities" | "sessions" | "aiSettings";
 
 /* =========================================================
    DESIGN SYSTEM
@@ -807,6 +807,52 @@ export default function App() {
         setSessionsLoading(false);
       }
     };
+
+  /* =========================================================
+     AI SETTINGS (المعلم الذكي)
+  ========================================================= */
+
+  const [aiSettings, setAiSettings] = useState<any>(null);
+  const [aiStats, setAiStats] = useState<any>(null);
+  const [aiSaveLoading, setAiSaveLoading] = useState(false);
+
+  const fetchAiSettings = async () => {
+    try {
+      const res = await api.get("/api/admin/ai/settings");
+      setAiSettings(res.data.settings || null);
+    } catch (e: any) {
+      showToast(e.response?.data?.message || "تعذر تحميل إعدادات المعلم الذكي", "error");
+    }
+  };
+
+  const fetchAiStats = async () => {
+    try {
+      const res = await api.get("/api/admin/ai/stats");
+      setAiStats(res.data.stats || null);
+    } catch (e: any) {
+      /* تجاهل */
+    }
+  };
+
+  const saveAiSettings = async () => {
+    if (!aiSettings) return;
+    setAiSaveLoading(true);
+    try {
+      const res = await api.put("/api/admin/ai/settings", {
+        aiEnabled: aiSettings.aiEnabled,
+        aiModel: aiSettings.aiModel,
+        aiDailyLimit: Number(aiSettings.aiDailyLimit),
+        aiHourlyLimit: Number(aiSettings.aiHourlyLimit),
+        aiMaintenanceMessage: aiSettings.aiMaintenanceMessage,
+      });
+      setAiSettings(res.data.settings || aiSettings);
+      showToast(res.data.message || "تم حفظ إعدادات المعلم الذكي بنجاح");
+    } catch (e: any) {
+      showToast(e.response?.data?.message || "فشل حفظ الإعدادات", "error");
+    } finally {
+      setAiSaveLoading(false);
+    }
+  };
 
   // 📥 تصدير CSV
   const exportCSV =
@@ -2862,6 +2908,23 @@ export default function App() {
               fetchSessions();
             }}
           />
+<SidebarButton
+            active={
+              activePage ===
+              "aiSettings"
+            }
+
+            icon="🤖"
+
+            label="المعلم الذكي"
+
+            onClick={() => {
+              navigate("aiSettings");
+              fetchAiSettings();
+            }}
+          />
+
+          <div
 
           <div
             style={{
@@ -4960,6 +5023,202 @@ export default function App() {
 
             </>
 
+          )}
+
+        {/* =================================================
+              AI SETTINGS (المعلم الذكي)
+          ================================================= */}
+
+          {activePage === "aiSettings" && (
+            <>
+              <PageHeader
+                title="المعلم الذكي"
+                description="إعدادات المعلم الذكي — الموديل، الحدود ووضع الصيانة"
+                loading={aiSaveLoading}
+                onRefresh={() => {
+                  fetchAiSettings();
+                  fetchAiStats();
+                }}
+              />
+
+              <section className="qd-card" style={{ marginBottom: 18 }}>
+                <SectionTitle
+                  title="إحصائيات سريعة"
+                  description="أرقام استخدام المعلم الذكي"
+                />
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns:
+                      "repeat(auto-fit, minmax(170px, 1fr))",
+                    gap: 12,
+                    marginTop: 8,
+                  }}
+                >
+                  {[
+                    { label: "طلبات اليوم", value: aiStats?.todayRequests ?? 0 },
+                    { label: "الطلبات (آخر ساعة)", value: aiStats?.lastHourRequests ?? 0 },
+                    { label: "مستخدمو اليوم", value: aiStats?.todayUsers ?? 0 },
+                    { label: "مرفوضة (Rate Limit)", value: aiStats?.rejectedRateLimit ?? 0 },
+                  ].map((stat) => (
+                    <div key={stat.label} style={{ padding: "14px 12px", borderRadius: 14, background: COLORS.bgPanelAlt, border: `1px solid ${COLORS.border}` }}>
+                      <div style={{ fontSize: 12, color: COLORS.textMuted }}>{stat.label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: COLORS.textPrimary, marginTop: 6 }}>{stat.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginTop: 12 }}>
+                  <div style={{ padding: "14px 12px", borderRadius: 14, background: COLORS.bgPanelAlt, border: `1px solid ${COLORS.border}` }}>
+                    <div style={{ fontSize: 12, color: COLORS.textMuted }}>الموديل الحالي</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.gold, marginTop: 6 }}>{aiSettings?.aiModel || "—"}</div>
+                  </div>
+                  <div style={{ padding: "14px 12px", borderRadius: 14, background: COLORS.bgPanelAlt, border: `1px solid ${COLORS.border}` }}>
+                    <div style={{ fontSize: 12, color: COLORS.textMuted }}>حالة الخدمة</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: aiSettings?.aiEnabled ? COLORS.success : COLORS.danger, marginTop: 6 }}>
+                      {aiSettings?.aiEnabled ? "🟢 يعمل" : "🔴 وضع الصيانة"}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+        <section className="qd-card" style={{ marginBottom: 18 }}>
+                <SectionTitle
+                  title="حالة الخدمة"
+                  description="تشغيل أو إيقاف المعلم الذكي مؤقتاً"
+                />
+
+                <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+                  <button
+                    type="button"
+                    className="qd-btn"
+                    style={aiSettings?.aiEnabled ? {
+                      background: "rgba(69,212,154,.14)",
+                      borderColor: COLORS.success,
+                      color: COLORS.success,
+                    } : undefined}
+                    onClick={() => setAiSettings({ ...aiSettings, aiEnabled: true })}
+                  >
+                    🟢 يعمل
+                  </button>
+
+                  <button
+                    type="button"
+                    className="qd-btn"
+                    style={!aiSettings?.aiEnabled ? {
+                      background: "rgba(255,116,124,.14)",
+                      borderColor: COLORS.danger,
+                      color: COLORS.danger,
+                    } : undefined}
+                    onClick={() => setAiSettings({ ...aiSettings, aiEnabled: false })}
+                  >
+                    🔴 وضع الصيانة
+                  </button>
+                </div>
+              </section>
+
+              <section className="qd-card" style={{ marginBottom: 18 }}>
+                <SectionTitle
+                  title="الموديل الحالي"
+                  description="اختر الموديل الذي يستخدمه المعلم الذكي في الطلبات الجديدة"
+                />
+
+                <select
+                  className="qd-field"
+                  dir="ltr"
+                  value={aiSettings?.aiModel || ""}
+                  onChange={(e) =>
+                    setAiSettings({
+                      ...aiSettings,
+                      aiModel: e.target.value,
+                    })
+                  }
+                  style={{ width: "100%", padding: "13px 15px", borderRadius: 12, marginTop: 8 }}
+                >
+                  {aiSettings?.availableModels?.map((m: any) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </section>
+
+        <section className="qd-card" style={{ marginBottom: 18 }}>
+                <SectionTitle
+                  title="الحدود اليومية"
+                  description="عدد الطلبات المسموحة لكل مستخدم"
+                />
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, marginTop: 8 }}>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <label style={{ fontSize: 13, color: COLORS.textSecondary }}>الحد اليومي لكل مستخدم</label>
+                    <input
+                      type="number"
+                      min={1}
+                      className="qd-field"
+                      value={aiSettings?.aiDailyLimit ?? 20}
+                      onChange={(e) =>
+                        setAiSettings({
+                          ...aiSettings,
+                          aiDailyLimit: Number(e.target.value),
+                        })
+                      }
+                      style={{ width: "100%", padding: "13px 15px", borderRadius: 12 }}
+                    />
+                  </div>
+
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <label style={{ fontSize: 13, color: COLORS.textSecondary }}>الحد بالساعة لكل مستخدم</label>
+                    <input
+                      type="number"
+                      min={1}
+                      className="qd-field"
+                      dir="ltr"
+                      value={aiSettings?.aiHourlyLimit ?? 30}
+                      onChange={(e) =>
+                        setAiSettings({
+                          ...aiSettings,
+                          aiHourlyLimit: Number(e.target.value),
+                        })
+                      }
+                      style={{ width: "100%", padding: "13px 15px", borderRadius: 12 }}
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section className="qd-card">
+                <SectionTitle
+                  title="رسالة الصيانة"
+                  description="النص الذي يظهر للطلاب أثناء وضع الصيانة"
+                />
+
+                <textarea
+                  className="qd-field"
+                  rows={4}
+                  dir="rtl"
+                  value={aiSettings?.aiMaintenanceMessage || ""}
+                  onChange={(e) =>
+                    setAiSettings({
+                      ...aiSettings,
+                      aiMaintenanceMessage: e.target.value,
+                    })
+                  }
+                  style={{ width: "100%", padding: "13px 15px", borderRadius: 12, minHeight: 110, marginTop: 8 }}
+                />
+              </section>
+
+              <button
+                type="button"
+                className="qd-btn qd-btn-gold"
+                disabled={aiSaveLoading}
+                onClick={saveAiSettings}
+                style={{ width: "100%", minHeight: 50, marginTop: 18 }}
+              >
+                {aiSaveLoading ? "جارٍ الحفظ..." : "حفظ الإعدادات"}
+              </button>
+            </>
           )}
 
         </main>

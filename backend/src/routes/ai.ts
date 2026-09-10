@@ -1,5 +1,14 @@
 import { FastifyInstance } from "fastify";
 
+import {
+  getAiSettings,
+} from "../services/aiSettings.js";
+
+import {
+  recordAiRequest,
+  recordAiRejection,
+} from "../services/aiActivity.js";
+
 /* =========================================================
    🎓 المعلم الذكي في قُدرة — معلم شخصي متكيف وسريع
 
@@ -56,41 +65,49 @@ import { FastifyInstance } from "fastify";
 const AI_MODELS = [
   {
     model: "moonshotai/kimi-k3",
+    label: "Kimi K3",
     url: "https://integrate.api.nvidia.com/v1/chat/completions",
     apiKeyEnv: "NVIDIA_API_KEY",
     cap: Number(process.env.KIMI_K3_DAILY_CAP || 500),
   },
   {
    model: "deepseek/deepseek-v4-pro",
+    label: "DeepSeek V4 Pro",
     url: "https://api.xkiro.com/v1/chat/completions",
     apiKeyEnv: "XKIRO_API_KEY",
     cap: Number(process.env.DEEPSEEK_V4_PRO_DAILY_CAP || 500),
   },
   {
     model: "qwen/qwen3.8-max:free",
+    label: "Qwen 3.8 Max",
     url: "https://api.xkiro.com/v1/chat/completions",
     apiKeyEnv: "XKIRO_API_KEY",
     cap: Number(process.env.QWEN_38_MAX_DAILY_CAP || 500),
   },
   {
     model: "qwen/qwen3.7-max:free",
+    label: "Qwen 3.7 Max",
     url: "https://api.xkiro.com/v1/chat/completions",
     apiKeyEnv: "XKIRO_API_KEY",
     cap: Number(process.env.QWEN_37_MAX_DAILY_CAP || 500),
   },
   {
     model: "qwen/qwen3.7-plus:free",
+    label: "Qwen 3.7 Plus",
     url: "https://api.xkiro.com/v1/chat/completions",
     apiKeyEnv: "XKIRO_API_KEY",
     cap: Number(process.env.QWEN_37_PLUS_DAILY_CAP || 500),
   },
   {
     model: "qwen/qwen3.6-plus:free",
+    label: "Qwen 3.6 Plus",
     url: "https://api.xkiro.com/v1/chat/completions",
     apiKeyEnv: "XKIRO_API_KEY",
     cap: Number(process.env.QWEN_36_PLUS_DAILY_CAP || 500),
   },
 ] as const;
+
+export { AI_MODELS };
 
 const QUOTA_WARNING_THRESHOLD = 0.9;
 
@@ -231,6 +248,8 @@ function getUsage(
   );
 }
 
+export { getUsage };
+
 function isModelNearCap(
   model: string,
   cap: number
@@ -344,7 +363,10 @@ const rateLimitStore =
   new Map<string, number[]>();
 
 function checkRateLimit(
-  userId: string
+  userId: string,
+
+  // 🎛️ الحد بالساعة يأتي من إعدادات لوحة التحكم (قاعدة البيانات)
+  maxRequests: number = RATE_LIMIT_MAX_REQUESTS
 ): {
   allowed: boolean;
   remaining: number;
@@ -364,7 +386,7 @@ function checkRateLimit(
 
   if (
     timestamps.length >=
-    RATE_LIMIT_MAX_REQUESTS
+    maxRequests
   ) {
     rateLimitStore.set(
       userId,
@@ -387,9 +409,76 @@ function checkRateLimit(
   return {
     allowed: true,
     remaining:
-      RATE_LIMIT_MAX_REQUESTS -
+      maxRequests -
       timestamps.length,
   };
+}
+
+// =========================================================
+// 📅 الحد اليومي لكل مستخدم
+// =========================================================
+
+const DAY_WINDOW_MS =
+  24 * 60 * 60 * 1000;
+
+const dailyUsageStore =
+  new Map<string, number[]>();
+
+function getDailyUsage(
+  userId: string
+): number {
+  const now = Date.now();
+
+  const timestamps = (
+    dailyUsageStore.get(
+      userId
+    ) || []
+  ).filter(
+    (t) =>
+      now - t <
+      DAY_WINDOW_MS
+  );
+
+  if (
+    timestamps.length ===
+    0
+  ) {
+    dailyUsageStore.delete(
+      userId
+    );
+
+    return 0;
+  }
+
+  dailyUsageStore.set(
+    userId,
+    timestamps
+  );
+
+  return timestamps.length;
+}
+
+function recordDailyUsage(
+  userId: string
+): void {
+  const now = Date.now();
+
+  const timestamps = (
+    dailyUsageStore.get(
+      userId
+    ) || []
+  ).filter(
+    (t) =>
+      now - t <
+      DAY_WINDOW_MS
+  );
+
+  timestamps.push(now);
+
+  dailyUsageStore.set(
+    userId,
+    timestamps
+  );
 }
 
 setInterval(
@@ -417,6 +506,33 @@ setInterval(
         );
       } else {
         rateLimitStore.set(
+          userId,
+          fresh
+        );
+      }
+    }
+
+    for (
+      const [
+        userId,
+        timestamps,
+      ] of dailyUsageStore.entries()
+    ) {
+      const fresh =
+        timestamps.filter(
+          (t) =>
+            now - t <
+            DAY_WINDOW_MS
+        );
+
+      if (
+        fresh.length === 0
+      ) {
+        dailyUsageStore.delete(
+          userId
+        );
+      } else {
+        dailyUsageStore.set(
           userId,
           fresh
         );
@@ -2314,6 +2430,35 @@ export async function aiRoutes(
           });
       }
 
+      // =====================================================
+      // 🚫 فحص حالة المعلم الذكي (الصيانة)
+      // قبل أي قراءة ثقيلة من قاعدة البيانات
+      // =====================================================
+
+      const aiSettings =
+        await getAiSettings(
+          app.prisma
+        );
+
+      if (!aiSettings.enabled) {
+        return reply
+          .status(503)
+          .header(
+            "Retry-After",
+            "300"
+          )
+          .send({
+            success:
+              false,
+
+            maintenance:
+              true,
+
+            message:
+              aiSettings.maintenanceMessage,
+          });
+      }
+
       const user =
         (
           request as any
@@ -2506,15 +2651,19 @@ export async function aiRoutes(
       }
 
       // =====================================================
-      // RATE LIMIT
+      // 🚦 RATE LIMIT (الحد بالساعة — من إعدادات قاعدة البيانات)
       // =====================================================
 
       const rate =
         checkRateLimit(
-          userId
+          userId,
+
+          aiSettings.hourlyLimit
         );
 
       if (!rate.allowed) {
+        recordAiRejection();
+
         return reply
           .status(429)
           .header(
@@ -2525,8 +2674,40 @@ export async function aiRoutes(
             success:
               false,
 
+            reason:
+              "hourly_limit",
+
             message:
               "لقد استخدمت الحد الأقصى من الأسئلة لهذه الساعة. حاول مجدداً بعد قليل.",
+          });
+      }
+
+      // =====================================================
+      // 📅 الحد اليومي لكل مستخدم (من إعدادات قاعدة البيانات)
+      // =====================================================
+
+      const dailyUsage =
+        getDailyUsage(
+          userId
+        );
+
+      if (
+        dailyUsage >=
+        aiSettings.dailyLimit
+      ) {
+        recordAiRejection();
+
+        return reply
+          .status(429)
+          .send({
+            success:
+              false,
+
+            reason:
+              "daily_limit",
+
+            message:
+              "لقد وصلت إلى الحد المسموح من استخدام المعلم الذكي حالياً، حاول لاحقاً.",
           });
       }
 
@@ -3524,7 +3705,7 @@ ${internalProfile.weaknesses.join(
       // 🤖 النماذج المتاحة
       // =====================================================
 
-      const candidates:
+      const availableCandidates:
         Array<{
           model: string;
           url: string;
@@ -3581,7 +3762,7 @@ ${internalProfile.weaknesses.join(
           );
         }
 
-        candidates.push({
+        availableCandidates.push({
           model,
 
           cap,
@@ -3592,6 +3773,32 @@ ${internalProfile.weaknesses.join(
             candidateApiKey,
         });
       }
+
+      // =====================================================
+      // 🎛️ ترتيب النماذج:
+      // الموديل الذي اختاره Admin من لوحة التحكم أولاً،
+      // ثم بقية النماذج بنفس ترتيب الـ fallback الأصلي
+      // (نظام الـ failover الحالي لم يتغير)
+      // =====================================================
+
+      const preferredCandidates =
+        availableCandidates.filter(
+          (candidate) =>
+            candidate.model ===
+            aiSettings.model
+        );
+
+      const otherCandidates =
+        availableCandidates.filter(
+          (candidate) =>
+            candidate.model !==
+            aiSettings.model
+        );
+
+      const candidates = [
+        ...preferredCandidates,
+        ...otherCandidates,
+      ];
 
       if (
         candidates.length ===
@@ -4117,6 +4324,14 @@ ${internalProfile.weaknesses.join(
         console.log(
           `[AI usage] ${chosen.model}: ${newUsage}/${chosen.cap}`
         );
+
+        // ===================================================
+        // 📊 تسجيل الاستخدام (إحصائيات اللوحة + الحد اليومي)
+        // ===================================================
+
+        recordAiRequest(userId);
+
+        recordDailyUsage(userId);
 
         console.log(
           `[Adaptive Teaching] user=${userId} category=${

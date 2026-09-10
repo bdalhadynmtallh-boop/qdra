@@ -1,0 +1,24 @@
+﻿          )}
+
+        </main>
+
+      </div>
+
+    </div>
+  );
+}
+
+/* =========================================================
+   SIDEBAR BUTTON
+========================================================= */
+
+function SidebarButton({
+  active,
+  icon,
+  label,
+  badge,
+  onClick,
+}: {
+  active: boolean;
+  icon: string;
+  label: string;
