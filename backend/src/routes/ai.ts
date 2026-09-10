@@ -55,41 +55,44 @@ import { FastifyInstance } from "fastify";
 
 const AI_MODELS = [
   {
+    model: "deepseek/deepseek-v4-pro",
+    url: "https://api.xkiro.com/v1/chat/completions",
+    apiKeyEnv: "XKIRO_API_KEY",
+    cap: Number(process.env.DEEPSEEK_V4_PRO_DAILY_CAP || 500),
+  },
+  {
+    model: "moonshotai/kimi-k3",
+    url: "https://integrate.api.nvidia.com/v1/chat/completions",
+    apiKeyEnv: "NVIDIA_API_KEY",
+    cap: Number(process.env.KIMI_K3_DAILY_CAP || 500),
+  },
+  {
     model: "qwen/qwen3.8-max:free",
-    cap: Number(
-      process.env.QWEN_38_MAX_DAILY_CAP || 500
-    ),
+    url: "https://api.xkiro.com/v1/chat/completions",
+    apiKeyEnv: "XKIRO_API_KEY",
+    cap: Number(process.env.QWEN_38_MAX_DAILY_CAP || 500),
   },
   {
     model: "qwen/qwen3.7-max:free",
-    cap: Number(
-      process.env.QWEN_37_MAX_DAILY_CAP || 500
-    ),
+    url: "https://api.xkiro.com/v1/chat/completions",
+    apiKeyEnv: "XKIRO_API_KEY",
+    cap: Number(process.env.QWEN_37_MAX_DAILY_CAP || 500),
   },
   {
     model: "qwen/qwen3.7-plus:free",
-    cap: Number(
-      process.env.QWEN_37_PLUS_DAILY_CAP || 500
-    ),
+    url: "https://api.xkiro.com/v1/chat/completions",
+    apiKeyEnv: "XKIRO_API_KEY",
+    cap: Number(process.env.QWEN_37_PLUS_DAILY_CAP || 500),
   },
   {
     model: "qwen/qwen3.6-plus:free",
-    cap: Number(
-      process.env.QWEN_36_PLUS_DAILY_CAP || 500
-    ),
-  },
-  {
-    model: "deepseek/deepseek-v4-pro",
-    cap: Number(
-      process.env.DEEPSEEK_V4_PRO_DAILY_CAP || 500
-    ),
+    url: "https://api.xkiro.com/v1/chat/completions",
+    apiKeyEnv: "XKIRO_API_KEY",
+    cap: Number(process.env.QWEN_36_PLUS_DAILY_CAP || 500),
   },
 ] as const;
 
 const QUOTA_WARNING_THRESHOLD = 0.9;
-
-const XKIRO_STREAM_URL =
-  "https://api.xkiro.com/v1/chat/completions";
 
 // =========================================================
 // 📊 إعدادات تحليل مستوى الطالب
@@ -3484,6 +3487,9 @@ ${internalProfile.weaknesses.join(
         ),
       ];
 
+      const REASONING_UNSUPPORTED =
+        "moonshotai/kimi-k3";
+
       const buildPayload = (
         model: string,
         includeReasoning: boolean
@@ -3501,7 +3507,9 @@ ${internalProfile.weaknesses.join(
         };
 
         if (
-          includeReasoning
+          includeReasoning &&
+          model !==
+            REASONING_UNSUPPORTED
         ) {
           payload.reasoning = {
             effort:
@@ -3520,15 +3528,31 @@ ${internalProfile.weaknesses.join(
         Array<{
           model: string;
           url: string;
+          apiKey: string;
           cap: number;
         }> = [];
 
       for (
         const {
           model,
+          url,
+          apiKeyEnv,
           cap,
         } of AI_MODELS
       ) {
+        const candidateApiKey =
+          process.env[
+            apiKeyEnv as "XKIRO_API_KEY" | "NVIDIA_API_KEY"
+          ] || "";
+
+        if (!candidateApiKey) {
+          console.warn(
+            `[AI config] ${model} تم تخطيه: مفتاح ${apiKeyEnv} غير مضبوط`
+          );
+
+          continue;
+        }
+
         if (
           isModelAtCap(
             model,
@@ -3562,8 +3586,10 @@ ${internalProfile.weaknesses.join(
 
           cap,
 
-          url:
-            XKIRO_STREAM_URL,
+          url,
+
+          apiKey:
+            candidateApiKey,
         });
       }
 
@@ -3605,6 +3631,14 @@ ${internalProfile.weaknesses.join(
 
       let lastFinishReason:
         string | null = null;
+
+      let inlineStreamError = "";
+
+      let preloadedReader:
+        | ReadableStreamDefaultReader<Uint8Array>
+        | null = null;
+
+      let preloadedBuffer = "";
 
       const outgoingPassage =
         cq
@@ -3724,13 +3758,13 @@ ${internalProfile.weaknesses.join(
 
                     headers: {
                       "Content-Type":
-                        "application/json",
+                        "application/json; charset=utf-8",
 
                       "Accept":
                         "text/event-stream",
 
                       "Authorization":
-                        `Bearer ${apiKey}`,
+                        `Bearer ${candidate.apiKey}`,
                     },
 
                     body:
@@ -3746,9 +3780,7 @@ ${internalProfile.weaknesses.join(
                   }
                 );
 
-              clearTimeout(
-                timeout
-              );
+              // نُبقي المؤقّت نشطاً أثناء فحص أول جزء من البث
 
               console.log(
                 `[AI] HTTP ${response.status} via ${candidate.model} in ${
@@ -3760,6 +3792,202 @@ ${internalProfile.weaknesses.join(
               if (
                 response.ok
               ) {
+                // =============================================
+                // 🧪 فحص أول جزء من البث قبل قبول النموذج:
+                // xkiro قد يرجع 200 مع خطأ مضمّن أو بث فارغ
+                // =============================================
+
+                const probeReader =
+                  response.body?.getReader();
+
+                if (!probeReader) {
+                  lastErrMsg =
+                    "empty response body";
+
+                  console.error(
+                    `[AI] ❌ ${candidate.model}: لا يوجد جسم للاستجابة`
+                  );
+
+                  break;
+                }
+
+                const probeDecoder =
+                  new TextDecoder(
+                    "utf-8"
+                  );
+
+                let probeRaw = "";
+
+                let probeFailed = false;
+
+                let probeSawActivity =
+                  false;
+
+                const probeDeadline =
+                  Date.now() +
+                  MODEL_TIMEOUT_MS;
+
+                // قراءة أول 8KB أو حتى أول دليل نشاط حقيقي
+                while (
+                  probeRaw.length <
+                    8192 &&
+                  !probeFailed &&
+                  !probeSawActivity &&
+                  Date.now() <
+                    probeDeadline
+                ) {
+                  const {
+                    done,
+                    value,
+                  } =
+                    await probeReader.read();
+
+                  if (done) {
+                    break;
+                  }
+
+                  probeRaw +=
+                    probeDecoder.decode(
+                      value,
+                      {
+                        stream:
+                          true,
+                      }
+                    );
+
+                  const probeLines =
+                    probeRaw.split(
+                      /\r?\n/
+                    );
+
+                  probeRaw =
+                    probeLines.pop() ||
+                    "";
+
+                  for (
+                    const line of
+                      probeLines
+                  ) {
+                    const trimmedLine =
+                      line.trim();
+
+                    if (
+                      !trimmedLine.startsWith(
+                        "data:"
+                      )
+                    ) {
+                      continue;
+                    }
+
+                    const probeJson =
+                      trimmedLine.slice(
+                        5
+                      ).trim();
+
+                    if (
+                      !probeJson ||
+                      probeJson ===
+                        "[DONE]"
+                    ) {
+                      continue;
+                    }
+
+                    try {
+                      const probeChunk =
+                        JSON.parse(
+                          probeJson
+                        );
+
+                      const probeError =
+                        probeChunk?.error
+                          ?.message ||
+                          (typeof probeChunk?.error ===
+                            "string"
+                            ? probeChunk.error
+                            : "");
+
+                      if (
+                        probeError
+                      ) {
+                        lastErrMsg =
+                          `inline stream error: ${probeError}`;
+
+                        console.error(
+                          `[AI] ❌ ${candidate.model}: ${lastErrMsg}`
+                        );
+
+                        probeFailed =
+                          true;
+
+                        break;
+                      }
+
+                      const deltaData =
+                        probeChunk?.choices?.[0]
+                          ?.delta;
+
+                      const probeContent =
+                        deltaData?.content ||
+                        probeChunk?.choices?.[0]
+                          ?.text;
+
+                      // reasoning_content = التفكير:
+                      // دليل قوي أن النموذج يستجيب فعلاً
+                      // (deepseek وkimi يفكّرون قبل الإجابة)
+                      const probeReasoning =
+                        deltaData?.reasoning_content;
+
+                      if (
+                        (typeof probeContent ===
+                          "string" &&
+                          probeContent.length >
+                            0) ||
+                        (typeof probeReasoning ===
+                          "string" &&
+                          probeReasoning.length >
+                            0)
+                      ) {
+                        probeSawActivity =
+                          true;
+
+                        break;
+                      }
+                    } catch {
+                      // chunk غير مكتمل: يبقى في buffer
+                    }
+                  }
+                }
+
+                // فشل: خطأ مضمّن أو بث فارغ → النموذج التالي
+                if (
+                  probeFailed ||
+                  !probeSawActivity
+                ) {
+                  try {
+                    await probeReader.cancel();
+                  } catch {
+                    // تجاهل
+                  }
+
+                  if (
+                    !probeFailed
+                  ) {
+                    lastErrMsg =
+                      "empty stream (no content chunks)";
+
+                    console.error(
+                      `[AI] ❌ ${candidate.model}: ${lastErrMsg}`
+                    );
+                  }
+
+                  break;
+                }
+
+                // النموذج نجح: نحفظ القارئ والنص الخام المحمّل مسبقًا
+                clearTimeout(
+                  timeout
+                );
+
                 upstream =
                   response;
 
@@ -3768,6 +3996,12 @@ ${internalProfile.weaknesses.join(
 
                 activeController =
                   controller;
+
+                preloadedReader =
+                  probeReader;
+
+                preloadedBuffer =
+                  probeRaw;
 
                 break;
               }
@@ -3938,8 +4172,12 @@ ${internalProfile.weaknesses.join(
           ": connected\n\n"
         );
 
-        const reader =
-          upstream.body?.getReader();
+        // ===================================================
+        // ♻️ نستخدم القارئ المحمّل مسبقًا من مرحلة الفحص
+        // حتى لا نفقد أول قطع من البث
+        // ===================================================
+
+        const reader = preloadedReader;
 
         if (!reader) {
           return reply.raw.end();
@@ -3951,7 +4189,7 @@ ${internalProfile.weaknesses.join(
           );
 
         let buffer =
-          "";
+          preloadedBuffer;
 
         let emitted =
           false;
@@ -4006,6 +4244,34 @@ ${internalProfile.weaknesses.join(
                   "string"
                 ? fallbackText
                 : "";
+
+          // =================================================
+          // 🧨 أخطاء 200 مع خطأ مضمّن في البث
+          // xkiro أحياناً يرجع 200 مع data: {"error": ...}
+          // =================================================
+
+          const inlineError =
+            chunk?.error
+              ?.message ||
+              (chunk?.error &&
+              typeof chunk.error ===
+                "string"
+                ? chunk.error
+                : "");
+
+          if (
+            inlineError &&
+            !piece
+          ) {
+            inlineStreamError =
+              String(inlineError);
+
+            console.error(
+              `[AI] ⚠️ خطأ مضمّن في البث عبر ${chosen?.model || "unknown"}: ${inlineStreamError}`
+            );
+
+            return;
+          }
 
           if (
             !piece
