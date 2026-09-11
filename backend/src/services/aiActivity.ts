@@ -11,9 +11,7 @@
 ========================================================= */
 
 function activityTodayKey(): string {
-  return new Date().toLocaleDateString(
-    "en-CA"
-  );
+  return new Date().toLocaleDateString("en-CA");
 }
 
 function activityCurrentHourKey(): string {
@@ -23,12 +21,9 @@ function activityCurrentHourKey(): string {
 interface AiActivityState {
   dateKey: string;
   hourKey: string;
-
   dayRequests: number;
   hourRequests: number;
-
   dayUsers: Set<string>;
-
   dayRejected: number;
   hourRejected: number;
 }
@@ -36,12 +31,9 @@ interface AiActivityState {
 const activityState: AiActivityState = {
   dateKey: activityTodayKey(),
   hourKey: activityCurrentHourKey(),
-
   dayRequests: 0,
   hourRequests: 0,
-
   dayUsers: new Set<string>(),
-
   dayRejected: 0,
   hourRejected: 0,
 };
@@ -66,9 +58,7 @@ function rolloverActivityCounters(): void {
 }
 
 /** يُسجَّل عند نجاح تنفيذ طلب المعلم فعلياً */
-export function recordAiRequest(
-  userId: string
-): void {
+export function recordAiRequest(userId: string): void {
   rolloverActivityCounters();
 
   activityState.dayRequests += 1;
@@ -99,12 +89,9 @@ export function getAiActivityStats(): {
 
   return {
     dateKey: activityState.dateKey,
-
     dayRequests: activityState.dayRequests,
     hourRequests: activityState.hourRequests,
-
     dayUsers: activityState.dayUsers.size,
-
     dayRejected: activityState.dayRejected,
     hourRejected: activityState.hourRejected,
   };

@@ -121,3 +121,59 @@ export async function getAiSettings(
 
   return settingsInFlight;
 }
+
+// =========================================================
+// 💾 حفظ/تحديث إعدادات المعلم الذكي (من لوحة التحكم)
+// =========================================================
+export async function updateAiSettings(
+  prisma: any,
+  data: Partial<AiSettings>
+): Promise<AiSettings> {
+  try {
+    const row = await prisma.aiSettings.upsert({
+      where: { id: 1 },
+      update: {
+        enabled: data.enabled !== undefined ? Boolean(data.enabled) : undefined,
+        model: data.model !== undefined ? String(data.model) : undefined,
+        dailyLimit: data.dailyLimit !== undefined 
+          ? Math.max(1, Number(data.dailyLimit) || 100) 
+          : undefined,
+        hourlyLimit: data.hourlyLimit !== undefined 
+          ? Math.max(1, Number(data.hourlyLimit) || 30) 
+          : undefined,
+        maintenanceMessage: data.maintenanceMessage !== undefined 
+          ? String(data.maintenanceMessage) 
+          : undefined,
+      },
+      create: {
+        id: 1,
+        enabled: data.enabled !== undefined ? Boolean(data.enabled) : true,
+        model: data.model !== undefined ? String(data.model) : AI_DEFAULT_MODEL,
+        dailyLimit: data.dailyLimit !== undefined 
+          ? Math.max(1, Number(data.dailyLimit) || 100) 
+          : AI_DEFAULT_DAILY_LIMIT,
+        hourlyLimit: data.hourlyLimit !== undefined 
+          ? Math.max(1, Number(data.hourlyLimit) || 30) 
+          : AI_DEFAULT_HOURLY_LIMIT,
+        maintenanceMessage: data.maintenanceMessage !== undefined 
+          ? String(data.maintenanceMessage) 
+          : AI_DEFAULT_MAINTENANCE_MESSAGE,
+      },
+    });
+
+    // ✅ إبطال الكاش فوراً بعد التحديث حتى تظهر التغييرات في الحال
+    invalidateAiSettingsCache();
+
+    return {
+      enabled: row.enabled,
+      model: row.model,
+      dailyLimit: row.dailyLimit,
+      hourlyLimit: row.hourlyLimit,
+      maintenanceMessage: row.maintenanceMessage,
+      updatedAt: row.updatedAt,
+    };
+  } catch (error) {
+    console.error("[AI settings] فشل حفظ الإعدادات:", error);
+    throw new Error("تعذر حفظ الإعدادات في قاعدة البيانات");
+  }
+}
