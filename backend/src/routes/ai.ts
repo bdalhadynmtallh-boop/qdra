@@ -13,9 +13,10 @@ import {
    🎓 المعلم الذكي في قُدرة — معلم شخصي متكيف وسريع
 
    ترتيب النماذج:
-   1) GLM 5.3 Flash
-   2) OpenAI GPT-OSS 20B — NVIDIA
-   3) Kimi K3 — NVIDIA
+   1) GLM 5.3 Flash (مجاني 🎁)
+   2) Qwen 3.8 Flash (مجاني 🎁)
+   3) OpenAI GPT-OSS 20B — NVIDIA (مجاني 🎁)
+   4) Kimi K3 — NVIDIA
 
    المميزات:
    - Adaptive Teaching
@@ -35,15 +36,17 @@ import {
    - حفظ المحادثة
    - Failover تلقائي
    - Streaming
+   - رد فوري عن هوية النموذج باسم النموذج الحقيقي الذي رد فعلياً
 
-   تحسينات:
+   تحسينات السرعة:
    - Cache لبنك الأسئلة
    - فهرس بالـ question ID وبالنص
    - قراءة آخر 300 محاولة للطالب فقط
-   - Cache لملف الطالب
+   - Cache لملف الطالب (90 ثانية)
    - تشغيل ملف الطالب وإحصائيات المنصة بالتوازي
-   - تنظيف مخرجات الذكاء الاصطناعي قبل عرضها
-   - منع Markdown والرموز الغريبة
+   - max_tokens = 20000
+   - timeout = 30000ms
+   - stream idle timeout = 60000ms
 ========================================================= */
 
 // =========================================================
@@ -80,208 +83,6 @@ const AI_MODELS = [
 export { AI_MODELS };
 
 const QUOTA_WARNING_THRESHOLD = 0.9;
-
-// =========================================================
-// 🧹 تنظيف مخرجات المعلم الذكي
-// =========================================================
-
-/**
- * المعلم الذكي يجب أن يعيد نصاً عربياً عادياً.
- *
- * هذا الفلتر حماية إضافية في حال تجاهل النموذج تعليمات
- * الإخراج وبدأ بإرسال Markdown أو رموز غريبة.
- *
- * لا نحذف الأقواس الطبيعية من النص.
- * نحذف فقط التكرارات الواضحة أو تنسيقات Markdown.
- */
-function cleanArabicAssistantText(text: string): string {
-  let value = String(text ?? "");
-
-  if (!value) {
-    return "";
-  }
-
-  // توحيد نهاية الأسطر.
-  value = value.replace(/\r\n?/g, "\n");
-
-  // إزالة الرموز المخفية التي قد تسبب مشاكل في اتجاه النص.
-  value = value.replace(/[\u200B\u200C\u200D\uFEFF]/g, "");
-
-  // إزالة Markdown code fences.
-  value = value.replace(/```[a-zA-Z0-9_-]*/g, "");
-  value = value.replace(/```/g, "");
-
-  // إزالة backticks.
-  value = value.replace(/`+/g, "");
-
-  // إزالة النجوم المستخدمة للتغليظ أو القوائم.
-  value = value.replace(/\*/g, "");
-
-  // إزالة عناوين Markdown مثل:
-  // ## السبب
-  // ### الحل
-  value = value.replace(/^\s*#{1,6}\s*/gm, "");
-
-  // إزالة علامات الاقتباس Markdown من بداية السطر.
-  value = value.replace(/^\s*>\s?/gm, "");
-
-  // تحويل قوائم Markdown إلى نص عادي.
-  value = value.replace(/^\s*[-+]\s+/gm, "");
-
-  // إزالة Markdown links مع إبقاء النص.
-  value = value.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    "$1"
-  );
-
-  // إزالة الـ escape characters الخاصة بـ Markdown.
-  value = value.replace(
-    /\\([\\`*_{}\[\]()#+\-.!>])/g,
-    "$1"
-  );
-
-  // منع الأقواس المتكررة الواضحة:
-  // ((النص)) -> (النص)
-  // (( النص )) -> ( النص )
-  value = value.replace(/\(\s*\(/g, "(");
-  value = value.replace(/\)\s*\)/g, ")");
-
-  // منع الأقواس المربعة المتكررة.
-  value = value.replace(/\[\s*\[/g, "[");
-  value = value.replace(/\]\s*\]/g, "]");
-
-  // إزالة المسافات الزائدة.
-  value = value.replace(/[ \t]{2,}/g, " ");
-
-  // إزالة المسافة قبل علامات الترقيم العربية.
-  value = value.replace(/\s+([،؛؟])/g, "$1");
-
-  // إزالة المسافة قبل النقطة والفاصلة والنقطتين.
-  value = value.replace(/\s+([.,:])/g, "$1");
-
-  // توحيد الفراغات حول الأسطر.
-  value = value.replace(/[ \t]+\n/g, "\n");
-  value = value.replace(/\n{3,}/g, "\n\n");
-
-  // منع تكرار علامات الترقيم بشكل واضح.
-  value = value.replace(/([؟،؛!])\1{1,}/g, "$1");
-
-  return value.trim();
-}
-
-// =========================================================
-// 🛡️ تعليمات إخراج عربية صارمة
-// =========================================================
-
-const ARABIC_OUTPUT_RULES = `
-قواعد إخراج النص — مهمة جداً:
-
-أنت تكتب للطالب العربي مباشرة.
-
-يجب أن يكون الرد نصاً عربياً طبيعياً وواضحاً وسهل القراءة.
-
-ممنوع استخدام Markdown نهائياً.
-
-ممنوع استخدام:
-*
-**
-#
-##
-###
-علامة backtick
--
-+
->
-[نص](رابط)
-
-ممنوع استخدام النجوم حول العناوين.
-
-لا تكتب:
-**الفكرة**
-
-اكتب:
-الفكرة
-
-لا تكتب:
-**الحل**
-
-اكتب:
-الحل
-
-لا تكتب:
-**السبب**
-
-اكتب:
-السبب
-
-لا تكتب عناوين محاطة برموز.
-
-لا تستخدم القوائم التي تبدأ بشرطة أو نجمة.
-
-إذا احتجت إلى ترتيب خطوات، استخدم:
-1. الخطوة الأولى
-2. الخطوة الثانية
-3. الخطوة الثالثة
-
-استخدم الأرقام العربية أو الأرقام العادية فقط عند الحاجة.
-
-لا تضع الأقواس بشكل متداخل بلا سبب.
-
-لا تكتب:
-((النص))
-
-ولا:
-(((النص)))
-
-ولا:
-[[
-النص
-]]
-
-لا تستخدم رموزاً زخرفية.
-
-لا تستخدم رموزاً برمجية.
-
-لا تستخدم HTML.
-
-لا تستخدم JSON.
-
-لا تستخدم XML.
-
-لا تستخدم LaTeX.
-
-لا تكتب أسماء تنسيقات داخل الرد.
-
-اكتب جملاً عربية سليمة.
-
-لا تكرر علامات الترقيم.
-
-لا تترك مسافات غريبة بين الكلمات.
-
-لا تلصق الكلمات ببعضها.
-
-إذا كان هناك عنوان، اكتبه في سطر مستقل بدون أي رموز.
-
-مثال صحيح:
-
-الفكرة
-
-العلاقة بين الكلمتين هي علاقة السبب والنتيجة.
-
-الحل
-
-الكلمة الأولى تدل على السبب، والكلمة الثانية تدل على النتيجة.
-
-السبب
-
-لأن العلاقة بينهما مباشرة.
-
-القاعدة
-
-ابحث عن نوع العلاقة أولاً، ثم طبقها على الخيار.
-
-هذا هو الشكل المطلوب دائماً.
-`;
 
 // =========================================================
 // 📊 إعدادات تحليل مستوى الطالب
@@ -340,7 +141,6 @@ const studentProfileCache = new Map<string, CachedStudentProfile>();
 setInterval(
   () => {
     const now = Date.now();
-
     for (const [userId, cached] of studentProfileCache.entries()) {
       if (now - cached.at > STUDENT_PROFILE_TTL_MS) {
         studentProfileCache.delete(userId);
@@ -365,9 +165,7 @@ const usageCounters = new Map<string, number>();
 function incrementUsage(model: string): number {
   const key = `${pacificDateKey()}:${model}`;
   const next = (usageCounters.get(key) || 0) + 1;
-
   usageCounters.set(key, next);
-
   return next;
 }
 
@@ -388,7 +186,6 @@ function isModelAtCap(model: string, cap: number): boolean {
 setInterval(
   () => {
     const todayKey = pacificDateKey();
-
     for (const key of usageCounters.keys()) {
       if (!key.startsWith(todayKey)) {
         usageCounters.delete(key);
@@ -405,12 +202,8 @@ setInterval(
 const NORMAL_THINKING_LEVEL = "low" as const;
 const DEEP_THINKING_LEVEL = "medium" as const;
 
-function getThinkingLevel(
-  useDeepReasoning: boolean
-): "low" | "medium" {
-  return useDeepReasoning
-    ? DEEP_THINKING_LEVEL
-    : NORMAL_THINKING_LEVEL;
+function getThinkingLevel(useDeepReasoning: boolean): "low" | "medium" {
+  return useDeepReasoning ? DEEP_THINKING_LEVEL : NORMAL_THINKING_LEVEL;
 }
 
 const DEEP_REASONING_CATEGORIES = new Set([
@@ -429,12 +222,7 @@ function shouldUseDeepReasoning(
 ): boolean {
   const q = String(question || "").trim();
 
-  if (
-    category &&
-    DEEP_REASONING_CATEGORIES.has(
-      normalizeCategory(category)
-    )
-  ) {
+  if (category && DEEP_REASONING_CATEGORIES.has(normalizeCategory(category))) {
     return true;
   }
 
@@ -465,35 +253,22 @@ const rateLimitStore = new Map<string, number[]>();
 function checkRateLimit(
   userId: string,
   maxRequests: number = RATE_LIMIT_MAX_REQUESTS
-): {
-  allowed: boolean;
-  remaining: number;
-} {
+): { allowed: boolean; remaining: number } {
   const now = Date.now();
 
-  const timestamps = (
-    rateLimitStore.get(userId) || []
-  ).filter(
+  const timestamps = (rateLimitStore.get(userId) || []).filter(
     (t) => now - t < RATE_LIMIT_WINDOW_MS
   );
 
   if (timestamps.length >= maxRequests) {
     rateLimitStore.set(userId, timestamps);
-
-    return {
-      allowed: false,
-      remaining: 0,
-    };
+    return { allowed: false, remaining: 0 };
   }
 
   timestamps.push(now);
-
   rateLimitStore.set(userId, timestamps);
 
-  return {
-    allowed: true,
-    remaining: maxRequests - timestamps.length,
-  };
+  return { allowed: true, remaining: maxRequests - timestamps.length };
 }
 
 // =========================================================
@@ -507,9 +282,7 @@ const dailyUsageStore = new Map<string, number[]>();
 function getDailyUsage(userId: string): number {
   const now = Date.now();
 
-  const timestamps = (
-    dailyUsageStore.get(userId) || []
-  ).filter(
+  const timestamps = (dailyUsageStore.get(userId) || []).filter(
     (t) => now - t < DAY_WINDOW_MS
   );
 
@@ -519,21 +292,17 @@ function getDailyUsage(userId: string): number {
   }
 
   dailyUsageStore.set(userId, timestamps);
-
   return timestamps.length;
 }
 
 function recordDailyUsage(userId: string): void {
   const now = Date.now();
 
-  const timestamps = (
-    dailyUsageStore.get(userId) || []
-  ).filter(
+  const timestamps = (dailyUsageStore.get(userId) || []).filter(
     (t) => now - t < DAY_WINDOW_MS
   );
 
   timestamps.push(now);
-
   dailyUsageStore.set(userId, timestamps);
 }
 
@@ -541,14 +310,8 @@ setInterval(
   () => {
     const now = Date.now();
 
-    for (const [
-      userId,
-      timestamps,
-    ] of rateLimitStore.entries()) {
-      const fresh = timestamps.filter(
-        (t) => now - t < RATE_LIMIT_WINDOW_MS
-      );
-
+    for (const [userId, timestamps] of rateLimitStore.entries()) {
+      const fresh = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
       if (fresh.length === 0) {
         rateLimitStore.delete(userId);
       } else {
@@ -556,14 +319,8 @@ setInterval(
       }
     }
 
-    for (const [
-      userId,
-      timestamps,
-    ] of dailyUsageStore.entries()) {
-      const fresh = timestamps.filter(
-        (t) => now - t < DAY_WINDOW_MS
-      );
-
+    for (const [userId, timestamps] of dailyUsageStore.entries()) {
+      const fresh = timestamps.filter((t) => now - t < DAY_WINDOW_MS);
       if (fresh.length === 0) {
         dailyUsageStore.delete(userId);
       } else {
@@ -587,31 +344,19 @@ interface PendingQuiz {
   createdAt: number;
 }
 
-const pendingQuizStore = new Map<
-  string,
-  PendingQuiz
->();
-
-const lastCategoryStore = new Map<
-  string,
-  string
->();
+const pendingQuizStore = new Map<string, PendingQuiz>();
+const lastCategoryStore = new Map<string, string>();
 
 const PENDING_QUIZ_TTL_MS = 30 * 60 * 1000;
 
-function getPendingQuiz(
-  userId: string
-): PendingQuiz | null {
+function getPendingQuiz(userId: string): PendingQuiz | null {
   const pending = pendingQuizStore.get(userId);
 
   if (!pending) {
     return null;
   }
 
-  if (
-    Date.now() - pending.createdAt >
-    PENDING_QUIZ_TTL_MS
-  ) {
+  if (Date.now() - pending.createdAt > PENDING_QUIZ_TTL_MS) {
     pendingQuizStore.delete(userId);
     return null;
   }
@@ -625,29 +370,19 @@ function matchStudentAnswer(
 ): number | null {
   const trimmed = message.trim();
 
-  const numMatch = trimmed.match(
-    /^\s*(\d)\s*$/
-  );
+  const numMatch = trimmed.match(/^\s*(\d)\s*$/);
 
   if (numMatch) {
-    const idx =
-      parseInt(numMatch[1], 10) - 1;
-
-    if (
-      idx >= 0 &&
-      idx < pending.options.length
-    ) {
+    const idx = parseInt(numMatch[1], 10) - 1;
+    if (idx >= 0 && idx < pending.options.length) {
       return idx;
     }
   }
 
-  const letterMatch = trimmed.match(
-    /^\s*([أبجدهه])(?:\s*[\)\-\.])?\s*$/
-  );
+  const letterMatch = trimmed.match(/^\s*([أبجددهه])(?:\s*[\)\-\.])?\s*$/);
 
   if (letterMatch) {
     const letter = letterMatch[1];
-
     const map: Record<string, number> = {
       "أ": 0,
       "ب": 1,
@@ -659,38 +394,19 @@ function matchStudentAnswer(
     };
 
     const idx = map[letter];
-
-    if (
-      typeof idx === "number" &&
-      idx >= 0 &&
-      idx < pending.options.length
-    ) {
+    if (typeof idx === "number" && idx >= 0 && idx < pending.options.length) {
       return idx;
     }
   }
 
-  const normalized = trimmed.replace(
-    /[\s\u064B-\u065F]/g,
-    ""
-  );
+  const normalized = trimmed.replace(/[\s\u064B-\u065F]/g, "");
 
-  for (
-    let i = 0;
-    i < pending.options.length;
-    i++
-  ) {
-    const opt = String(
-      pending.options[i] || ""
-    ).replace(
+  for (let i = 0; i < pending.options.length; i++) {
+    const opt = String(pending.options[i] || "").replace(
       /[\s\u064B-\u065F]/g,
       ""
     );
-
-    if (
-      opt &&
-      normalized &&
-      normalized === opt
-    ) {
+    if (opt && normalized && normalized === opt) {
       return i;
     }
   }
@@ -702,11 +418,7 @@ function matchStudentAnswer(
 // 🧠 Adaptive Teaching
 // =========================================================
 
-type TeachingDepth =
-  | "foundation"
-  | "guided"
-  | "concise"
-  | "advanced";
+type TeachingDepth = "foundation" | "guided" | "concise" | "advanced";
 
 interface SkillStat {
   name: string;
@@ -730,12 +442,8 @@ interface InternalStudentProfile {
 // 🧹 توحيد أسماء الفئات
 // =========================================================
 
-function normalizeCategory(
-  value?: string
-): string {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ");
+function normalizeCategory(value?: string): string {
+  return String(value || "").trim().replace(/\s+/g, " ");
 }
 
 function findCurrentSkill(
@@ -746,31 +454,21 @@ function findCurrentSkill(
     return undefined;
   }
 
-  const wanted =
-    normalizeCategory(category);
+  const wanted = normalizeCategory(category);
 
   const exact = skills.find(
-    (skill) =>
-      normalizeCategory(skill.name) ===
-      wanted
+    (skill) => normalizeCategory(skill.name) === wanted
   );
-
   if (exact) {
     return exact;
   }
 
   return skills.find((skill) => {
-    const name =
-      normalizeCategory(skill.name);
-
+    const name = normalizeCategory(skill.name);
     if (!name || !wanted) {
       return false;
     }
-
-    return (
-      name.includes(wanted) ||
-      wanted.includes(name)
-    );
+    return name.includes(wanted) || wanted.includes(name);
   });
 }
 
@@ -784,104 +482,48 @@ function determineTeachingDepth(
 ): {
   depth: TeachingDepth;
   skill?: SkillStat;
-  source:
-    | "skill"
-    | "general"
-    | "unknown";
+  source: "skill" | "general" | "unknown";
 } {
   if (!profile) {
-    return {
-      depth: "guided",
-      source: "unknown",
-    };
+    return { depth: "guided", source: "unknown" };
   }
 
-  const skill = findCurrentSkill(
-    profile.skills,
-    category
-  );
+  const skill = findCurrentSkill(profile.skills, category);
 
-  if (
-    skill &&
-    skill.total >= MIN_SKILL_SAMPLE
-  ) {
+  if (skill && skill.total >= MIN_SKILL_SAMPLE) {
     if (skill.accuracy < 60) {
-      return {
-        depth: "foundation",
-        skill,
-        source: "skill",
-      };
+      return { depth: "foundation", skill, source: "skill" };
     }
-
     if (skill.accuracy < 80) {
-      return {
-        depth: "guided",
-        skill,
-        source: "skill",
-      };
+      return { depth: "guided", skill, source: "skill" };
     }
-
     if (skill.accuracy < 90) {
-      return {
-        depth: "concise",
-        skill,
-        source: "skill",
-      };
+      return { depth: "concise", skill, source: "skill" };
     }
-
-    return {
-      depth: "advanced",
-      skill,
-      source: "skill",
-    };
+    return { depth: "advanced", skill, source: "skill" };
   }
 
   if (profile.solvedQuestions >= 15) {
     if (profile.accuracy < 60) {
-      return {
-        depth: "foundation",
-        skill,
-        source: "general",
-      };
+      return { depth: "foundation", skill, source: "general" };
     }
-
     if (profile.accuracy < 80) {
-      return {
-        depth: "guided",
-        skill,
-        source: "general",
-      };
+      return { depth: "guided", skill, source: "general" };
     }
-
     if (profile.accuracy < 90) {
-      return {
-        depth: "concise",
-        skill,
-        source: "general",
-      };
+      return { depth: "concise", skill, source: "general" };
     }
-
-    return {
-      depth: "advanced",
-      skill,
-      source: "general",
-    };
+    return { depth: "advanced", skill, source: "general" };
   }
 
-  return {
-    depth: "guided",
-    skill,
-    source: "unknown",
-  };
+  return { depth: "guided", skill, source: "unknown" };
 }
 
 // =========================================================
 // 📚 تعليمات التدريس
 // =========================================================
 
-function buildTeachingInstruction(
-  depth: TeachingDepth
-): string {
+function buildTeachingInstruction(depth: TeachingDepth): string {
   switch (depth) {
     case "foundation":
       return `
@@ -945,9 +587,7 @@ function buildTeachingInstruction(
 // 🔄 إعادة الشرح
 // =========================================================
 
-function isConfusionMessage(
-  message?: string
-): boolean {
+function isConfusionMessage(message?: string): boolean {
   if (!message) {
     return false;
   }
@@ -963,7 +603,6 @@ const REEXPLAIN_INSTRUCTION = `
 الطالب يشير إلى أنه لم يفهم الشرح السابق أو يريد تبسيطاً إضافياً.
 
 تعليمات إعادة الشرح:
-
 - لا تكرر الشرح السابق بنفس الكلمات.
 - غير طريقة الشرح.
 - ابدأ من نقطة أبسط.
@@ -985,11 +624,9 @@ const BASE_SYSTEM_PROMPT = `
 هدفك ليس إعطاء الإجابة فقط، بل تعليم كل طالب بالطريقة المناسبة لمستواه الحقيقي.
 
 تخصصك:
-
 التناظر اللفظي، إكمال الجمل، الخطأ السياقي، المفردة المختلفة، استيعاب المقروء، المفردات، العلاقات بين الكلمات، واستراتيجيات القدرات اللفظية.
 
 شخصيتك:
-
 - واضح وذكي وصبور وطبيعي.
 - تكيف مع مستوى الطالب.
 - لا تستخدم نفس مقدار الشرح لجميع الطلاب.
@@ -999,20 +636,11 @@ const BASE_SYSTEM_PROMPT = `
 - لا تتحدث بأسلوب روبوتي أو رسمي مفرط.
 
 السؤال عن هوية النموذج:
-
-- إذا سأل الطالب: انت أي نموذج؟ أو أي موديل انت؟ أو ما هو نموذجك؟ أو أي نموذج ذكاء اصطناعي يشرح لي؟ أو أي صيغة مشابهة للسؤال عن هويتك كنموذج، فأجب فوراً ومباشرة وبجملة واحدة:
-
-أنا نموذج {MODEL_IDENTITY}، المعلم الذكي في منصة قُدرة.
-
-- لا تتردد.
-- لا تقل يصعب تحديده.
-- لا تقل لا أعرف.
-- لا تذكر أسماء نماذج أخرى داخلية أو بديلة.
-- لا تذكر نظام تبديل النماذج.
-- لا تذكر النماذج الاحتياطية.
+- إذا سأل الطالب: انت أي نموذج؟ أو أي موديل انت؟ أو ما هو نموذجك؟ أو أي نموذج ذكاء اصطناعي يشرح لي؟ أو أي صيغة مشابهة للسؤال عن هويتك كنموذج، فأجب فوراً ومباشرة وبجملة واحدة: أنا نموذج {MODEL_IDENTITY}، المعلم الذكي في منصة قُدرة.
+- لا تتردد ولا تقل يصعب تحديده أو لا أعرف.
+- لا تذكر أسماء نماذج أخرى داخلية أو بديلة، ولا تذكر نظام تبديل النماذج أو النماذج الاحتياطية.
 
 التخصيص:
-
 - النظام يحلل نتائج الطالب الحقيقية المسجلة في المنصة حسب الموضوع.
 - ستصلك تعليمات تحدد مستوى الشرح المناسب للطالب.
 - التزم بمستوى الشرح الذي يحدده النظام.
@@ -1020,21 +648,19 @@ const BASE_SYSTEM_PROMPT = `
 - الأداء الحديث في المهارة أهم من الأداء القديم.
 - لا تذكر للطالب تصنيفه الداخلي.
 - لا تقل للطالب إنه ضعيف أو أن النظام صنفه بمستوى معين.
-- لا تعرض نسبته أو عدد محاولاته إلا إذا طلب إحصائياته صراحة.
+- لا تعرض نسبه أو عدد محاولاته إلا إذا طلب إحصائياته صراحة.
 - استخدم البيانات داخلياً فقط لتخصيص طريقة التعليم.
 - إذا كان الطالب متمكناً، اختصر.
 - إذا كان يحتاج تأسيساً، ابدأ من الأساس.
 - إذا قال إنه لم يفهم، غير طريقة الشرح وبسطها.
 
 فهم السياق:
-
 - أنت تتابع محادثة مستمرة.
 - قد يقول الطالب "ما فهمت" أو "ليش؟" أو "وضح أكثر" أو "أعطني مثالاً".
 - اربط هذه الرسائل بالشرح السابق.
 - لا تطلب إعادة السؤال إذا كان المقصود واضحاً.
 
 مصدر الأسئلة والخيارات — إلزامي جداً:
-
 - لا تخترع أي سؤال من نفسك.
 - لا تنشئ سؤالاً جديداً من خيالك.
 - لا تنشئ خيارات جديدة.
@@ -1049,7 +675,6 @@ const BASE_SYSTEM_PROMPT = `
 - لا تعوض ذلك بسؤال من عندك.
 
 الإجابة الصحيحة — إلزامي:
-
 - إذا أرسل النظام الإجابة الصحيحة المؤكدة، فهي نهائية.
 - لا تعد اختيار الإجابة بنفسك.
 - لا تغير الإجابة الصحيحة.
@@ -1057,7 +682,6 @@ const BASE_SYSTEM_PROMPT = `
 - تعامل فقط مع الخيارات المرسلة من النظام.
 
 استيعاب المقروء:
-
 - إذا أرسلت قطعة استيعاب مقروء، فهي جزء أساسي من السؤال.
 - اقرأ القطعة كاملة.
 - اعتمد عليها بوصفها المصدر الأساسي للإجابة.
@@ -1067,29 +691,22 @@ const BASE_SYSTEM_PROMPT = `
 - إذا كانت الإجابة الصحيحة مؤكدة من النظام، فلا تغيرها.
 
 شرح السؤال الحالي:
-
 استخدم العناوين عند فائدتها، وليس بشكل آلي في كل رد.
-
-إذا استخدمت عنواناً، اكتبه في سطر مستقل بدون أي رموز.
-
-مثال:
 
 الفكرة
 
 الحل
 
-السبب
+لماذا؟
 
 المشتت
 
 القاعدة
 
 إذا كان مستوى الطالب متقدماً، اختصر الشرح.
-
 إذا كان مستوى الطالب تأسيسياً، قسم الشرح إلى خطوات أبسط.
 
 التدريب التفاعلي:
-
 - إذا طلب الطالب اختباراً أو سؤالاً تدريبياً، استخدم سؤال البنك فقط.
 - لا تكشف الإجابة قبل إجابة الطالب.
 - لا تغير الخيارات.
@@ -1098,7 +715,6 @@ const BASE_SYSTEM_PROMPT = `
 - اشرح النتيجة بما يناسب مستوى الطالب.
 
 منع الهلوسة:
-
 - لا تخترع إجابات.
 - لا تخترع خيارات.
 - لا تخترع أسئلة تدريبية.
@@ -1107,7 +723,6 @@ const BASE_SYSTEM_PROMPT = `
 - إذا تعذر تحديد معلومة من المعطيات، قل ذلك بوضوح.
 
 الإملاء والكتابة:
-
 - اكتب بالعربية الفصحى الواضحة.
 - راجع الإملاء والنحو والصياغة قبل الرد.
 - راجع الهمزات والتاء المربوطة والتاء المفتوحة.
@@ -1116,26 +731,16 @@ const BASE_SYSTEM_PROMPT = `
 - لا تستخدم كلمات مشوهة.
 - لا تعرض رموزاً برمجية للطالب.
 - لا تكتب \\n أو \\t كنص ظاهر.
-- لا تستخدم الإنجليزية إلا عند الحاجة الشديدة.
-- لا تستخدم زخارف أو رموزاً غير ضرورية.
 
 تنسيق الرد:
-
 - استخدم نصاً عادياً فقط.
 - لا تستخدم Markdown.
-- لا تستخدم النجمتين.
-- لا تستخدم النجمة.
 - لا تستخدم علامات الشباك للعناوين.
+- لا تستخدم النجمتين لتغليظ النص.
 - لا تستخدم HTML.
-- لا تستخدم code fences.
-- لا تستخدم backticks.
-- لا تستخدم قوائم تبدأ بشرطة.
-- لا تستخدم قوائم تبدأ بنجمة.
 - اكتب العناوين مباشرة دون رموز.
 - استخدم الأسطر الفارغة لتنظيم الشرح.
 - لا تغير نص السؤال أو الخيارات الأصلية من البنك.
-
-${ARABIC_OUTPUT_RULES}
 `;
 
 // =========================================================
@@ -1150,7 +755,6 @@ const PLATFORM_KNOWLEDGE = `
 - نبذة: [اكتب نبذة قصيرة عن المنصة ورؤيتها هنا].
 
 المميزات:
-
 1) أقسام تدريبية مصنفة.
 2) محاكي اختبار شامل بمؤقت وتقرير أداء.
 3) ملفات PDF لكل قسم.
@@ -1176,35 +780,25 @@ let platformStatsCache: {
 
 const PLATFORM_STATS_TTL = 10 * 60 * 1000;
 
-async function getPlatformStats(
-  app: FastifyInstance
-) {
+async function getPlatformStats(app: FastifyInstance) {
   if (
     platformStatsCache &&
-    Date.now() - platformStatsCache.at <
-      PLATFORM_STATS_TTL
+    Date.now() - platformStatsCache.at < PLATFORM_STATS_TTL
   ) {
     return platformStatsCache;
   }
 
   try {
-    const sections =
-      await app.prisma.section.findMany({
-        where: {
-          isActive: true,
-        },
-        select: {
-          questions: true,
-        },
-      });
+    const sections = await app.prisma.section.findMany({
+      where: { isActive: true },
+      select: { questions: true },
+    });
 
     let questions = 0;
 
     for (const section of sections) {
       if (Array.isArray(section.questions)) {
-        questions += (
-          section.questions as any[]
-        ).length;
+        questions += (section.questions as any[]).length;
       }
     }
 
@@ -1214,10 +808,7 @@ async function getPlatformStats(
       at: Date.now(),
     };
   } catch (error) {
-    console.error(
-      "platform stats error:",
-      error
-    );
+    console.error("platform stats error:", error);
 
     if (!platformStatsCache) {
       platformStatsCache = {
@@ -1242,164 +833,112 @@ async function refreshQuestionIndex(
     return questionIndexRefreshPromise;
   }
 
-  questionIndexRefreshPromise =
-    (async () => {
-      try {
-        const sections =
-          await app.prisma.section.findMany({
-            where: {
-              isActive: true,
-            },
-            select: {
-              id: true,
-              name: true,
-              category: true,
-              type: true,
-              questions: true,
-            },
-          });
+  questionIndexRefreshPromise = (async () => {
+    try {
+      const sections = await app.prisma.section.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          name: true,
+          category: true,
+          type: true,
+          questions: true,
+        },
+      });
 
-        const questionMeta =
-          new Map<
-            string,
-            CachedQuestionMeta
-          >();
+      const questionMeta = new Map<string, CachedQuestionMeta>();
+      const questionById = new Map<string, CachedBankQuestion>();
+      const sectionCategory = new Map<number, string>();
+      const allQuestions: CachedBankQuestion[] = [];
 
-        const questionById =
-          new Map<
-            string,
-            CachedBankQuestion
-          >();
-
-        const sectionCategory =
-          new Map<number, string>();
-
-        const allQuestions:
-          CachedBankQuestion[] = [];
-
-        for (const section of sections) {
-          const fallbackCategory =
-            normalizeCategory(
-              section.category ||
-                section.type ||
-                section.name ||
-                `قسم ${section.id}`
-            );
-
-          sectionCategory.set(
-            section.id,
-            fallbackCategory
-          );
-
-          const questions =
-            Array.isArray(section.questions)
-              ? section.questions
-              : [];
-
-          for (const question of questions as any[]) {
-            if (
-              !question ||
-              !question.question
-            ) {
-              continue;
-            }
-
-            const id =
-              question.id != null
-                ? String(question.id).trim()
-                : "";
-
-            const text =
-              String(question.question).trim();
-
-            if (!text) {
-              continue;
-            }
-
-            const category =
-              normalizeCategory(
-                question.category ||
-                  fallbackCategory
-              );
-
-            const passage = String(
-              question.passage ||
-                question.context ||
-                question.passageText ||
-                question.readingPassage ||
-                question.paragraph ||
-                ""
-            ).trim();
-
-            const options =
-              Array.isArray(question.options)
-                ? question.options.map(
-                    (option: unknown) =>
-                      String(option ?? "")
-                  )
-                : [];
-
-            const correctIndex =
-              Number.isInteger(
-                question.correctIndex
-              )
-                ? question.correctIndex
-                : 0;
-
-            const meta: CachedQuestionMeta = {
-              category,
-              passage,
-            };
-
-            questionMeta.set(
-              text,
-              meta
-            );
-
-            const cachedQuestion:
-              CachedBankQuestion = {
-              id: id || undefined,
-              question: text,
-              options,
-              correctIndex,
-              category,
-              explanation:
-                question.explanation,
-              passage,
-            };
-
-            if (id) {
-              questionById.set(
-                id,
-                cachedQuestion
-              );
-            }
-
-            allQuestions.push(
-              cachedQuestion
-            );
-          }
-        }
-
-        const result: QuestionIndexCache = {
-          at: Date.now(),
-          questionMeta,
-          questionById,
-          sectionCategory,
-          allQuestions,
-        };
-
-        questionIndexCache = result;
-
-        console.log(
-          `[AI cache] Question index refreshed: ${allQuestions.length} questions | ${questionById.size} indexed by ID`
+      for (const section of sections) {
+        const fallbackCategory = normalizeCategory(
+          section.category ||
+            section.type ||
+            section.name ||
+            `قسم ${section.id}`
         );
 
-        return result;
-      } finally {
-        questionIndexRefreshPromise = null;
+        sectionCategory.set(section.id, fallbackCategory);
+
+        const questions = Array.isArray(section.questions)
+          ? section.questions
+          : [];
+
+        for (const question of questions as any[]) {
+          if (!question || !question.question) {
+            continue;
+          }
+
+          const id =
+            question.id != null ? String(question.id).trim() : "";
+
+          const text = String(question.question).trim();
+          if (!text) {
+            continue;
+          }
+
+          const category = normalizeCategory(
+            question.category || fallbackCategory
+          );
+
+          const passage = String(
+            question.passage ||
+              question.context ||
+              question.passageText ||
+              question.readingPassage ||
+              question.paragraph ||
+              ""
+          ).trim();
+
+          const options = Array.isArray(question.options)
+            ? question.options.map((option: unknown) => String(option ?? ""))
+            : [];
+
+          const correctIndex = Number.isInteger(question.correctIndex)
+            ? question.correctIndex
+            : 0;
+
+          const meta: CachedQuestionMeta = { category, passage };
+          questionMeta.set(text, meta);
+
+          const cachedQuestion: CachedBankQuestion = {
+            id: id || undefined,
+            question: text,
+            options,
+            correctIndex,
+            category,
+            explanation: question.explanation,
+            passage,
+          };
+
+          if (id) {
+            questionById.set(id, cachedQuestion);
+          }
+
+          allQuestions.push(cachedQuestion);
+        }
       }
-    })();
+
+      const result: QuestionIndexCache = {
+        at: Date.now(),
+        questionMeta,
+        questionById,
+        sectionCategory,
+        allQuestions,
+      };
+
+      questionIndexCache = result;
+
+      console.log(
+        `[AI cache] Question index refreshed: ${allQuestions.length} questions | ${questionById.size} indexed by ID`
+      );
+
+      return result;
+    } finally {
+      questionIndexRefreshPromise = null;
+    }
+  })();
 
   return questionIndexRefreshPromise;
 }
@@ -1409,8 +948,7 @@ async function getQuestionIndex(
 ): Promise<QuestionIndexCache> {
   if (
     questionIndexCache &&
-    Date.now() - questionIndexCache.at <
-      QUESTION_INDEX_TTL_MS
+    Date.now() - questionIndexCache.at < QUESTION_INDEX_TTL_MS
   ) {
     return questionIndexCache;
   }
@@ -1421,25 +959,17 @@ async function getQuestionIndex(
 function getCachedQuestionMeta(
   questionText: string
 ): CachedQuestionMeta | undefined {
-  return questionIndexCache?.questionMeta.get(
-    questionText
-  );
+  return questionIndexCache?.questionMeta.get(questionText);
 }
 
 function getCachedQuestionById(
   questionId: string
 ): CachedBankQuestion | undefined {
-  return questionIndexCache?.questionById.get(
-    String(questionId).trim()
-  );
+  return questionIndexCache?.questionById.get(String(questionId).trim());
 }
 
-function getCachedSectionCategory(
-  sectionId: number
-): string | undefined {
-  return questionIndexCache?.sectionCategory.get(
-    sectionId
-  );
+function getCachedSectionCategory(sectionId: number): string | undefined {
+  return questionIndexCache?.sectionCategory.get(sectionId);
 }
 
 // =========================================================
@@ -1449,23 +979,16 @@ function getCachedSectionCategory(
 function classifySkill(
   accuracy: number,
   total: number
-):
-  | "قوة"
-  | "متوسط"
-  | "ضعف"
-  | "غير كافٍ" {
+): "قوة" | "متوسط" | "ضعف" | "غير كافٍ" {
   if (total < MIN_SKILL_SAMPLE) {
     return "غير كافٍ";
   }
-
   if (accuracy >= 90) {
     return "قوة";
   }
-
   if (accuracy < 70) {
     return "ضعف";
   }
-
   return "متوسط";
 }
 
@@ -1477,30 +1000,22 @@ async function buildStudentProfile(
   app: FastifyInstance,
   userId: string
 ): Promise<InternalStudentProfile | null> {
-  const attempts:
-    Array<{
-      sectionId: number;
-      questionId: string;
-      isCorrect: boolean;
-      createdAt: Date;
-    }> =
-    await app.prisma.questionAttempt.findMany(
-      {
-        where: {
-          userId,
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-        take: STUDENT_PROFILE_ATTEMPT_LIMIT,
-        select: {
-          sectionId: true,
-          questionId: true,
-          isCorrect: true,
-          createdAt: true,
-        },
-      }
-    );
+  const attempts: Array<{
+    sectionId: number;
+    questionId: string;
+    isCorrect: boolean;
+    createdAt: Date;
+  }> = await app.prisma.questionAttempt.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    take: STUDENT_PROFILE_ATTEMPT_LIMIT,
+    select: {
+      sectionId: true,
+      questionId: true,
+      isCorrect: true,
+      createdAt: true,
+    },
+  });
 
   if (attempts.length === 0) {
     return null;
@@ -1510,102 +1025,55 @@ async function buildStudentProfile(
     await getQuestionIndex(app);
   }
 
-  const attemptsBySkill =
-    new Map<
-      string,
-      Array<{
-        isCorrect: boolean;
-        createdAt: Date;
-      }>
-    >();
+  const attemptsBySkill = new Map<
+    string,
+    Array<{ isCorrect: boolean; createdAt: Date }>
+  >();
 
   for (const attempt of attempts) {
-    const questionId =
-      String(attempt.questionId).trim();
+    const questionId = String(attempt.questionId).trim();
 
-    const cachedQuestion =
-      getCachedQuestionById(questionId);
+    const cachedQuestion = getCachedQuestionById(questionId);
 
     const meta = cachedQuestion
       ? {
-          category: normalizeCategory(
-            cachedQuestion.category
-          ),
-          passage: String(
-            cachedQuestion.passage || ""
-          ).trim(),
+          category: normalizeCategory(cachedQuestion.category),
+          passage: String(cachedQuestion.passage || "").trim(),
         }
-      : undefined;
+      : getCachedQuestionMeta(questionId);
 
-    const category =
-      normalizeCategory(
-        meta?.category ||
-          getCachedSectionCategory(
-            attempt.sectionId
-          ) ||
-          `قسم ${attempt.sectionId}`
-      );
-
-    const list =
-      attemptsBySkill.get(category) || [];
-
-    list.push({
-      isCorrect: attempt.isCorrect,
-      createdAt: attempt.createdAt,
-    });
-
-    attemptsBySkill.set(
-      category,
-      list
+    const category = normalizeCategory(
+      meta?.category ||
+        getCachedSectionCategory(attempt.sectionId) ||
+        `قسم ${attempt.sectionId}`
     );
+
+    const list = attemptsBySkill.get(category) || [];
+    list.push({ isCorrect: attempt.isCorrect, createdAt: attempt.createdAt });
+    attemptsBySkill.set(category, list);
   }
 
   const skills: SkillStat[] = [];
 
-  for (const [
-    name,
-    skillAttempts,
-  ] of attemptsBySkill.entries()) {
-    const recentAttempts =
-      skillAttempts.slice(
-        0,
-        RECENT_SKILL_ATTEMPT_LIMIT
-      );
+  for (const [name, skillAttempts] of attemptsBySkill.entries()) {
+    const recentAttempts = skillAttempts.slice(0, RECENT_SKILL_ATTEMPT_LIMIT);
 
-    const recentCorrect =
-      recentAttempts.filter(
-        (attempt) =>
-          attempt.isCorrect
-      ).length;
-
-    const recentTotal =
-      recentAttempts.length;
-
+    const recentCorrect = recentAttempts.filter(
+      (attempt) => attempt.isCorrect
+    ).length;
+    const recentTotal = recentAttempts.length;
     const recentAccuracy =
       recentTotal > 0
-        ? Math.round(
-            (recentCorrect /
-              recentTotal) *
-              100
-          )
+        ? Math.round((recentCorrect / recentTotal) * 100)
         : 0;
 
-    const historicalCorrect =
-      skillAttempts.filter(
-        (attempt) =>
-          attempt.isCorrect
-      ).length;
-
-    const historicalTotal =
-      skillAttempts.length;
-
+    const historicalCorrect = skillAttempts.filter(
+      (attempt) => attempt.isCorrect
+    ).length;
+    const historicalTotal = skillAttempts.length;
     const historicalAccuracy =
       historicalTotal > 0
-        ? Math.round(
-            (historicalCorrect /
-              historicalTotal) *
-              100
-          )
+        ? Math.round((historicalCorrect / historicalTotal) * 100)
         : 0;
 
     skills.push({
@@ -1619,50 +1087,21 @@ async function buildStudentProfile(
     });
   }
 
-  skills.sort(
-    (a, b) =>
-      a.accuracy - b.accuracy
-  );
+  skills.sort((a, b) => a.accuracy - b.accuracy);
 
   const strengths = skills
-    .filter(
-      (skill) =>
-        classifySkill(
-          skill.accuracy,
-          skill.total
-        ) === "قوة"
-    )
-    .map(
-      (skill) => skill.name
-    );
+    .filter((skill) => classifySkill(skill.accuracy, skill.total) === "قوة")
+    .map((skill) => skill.name);
 
   const weaknesses = skills
-    .filter(
-      (skill) =>
-        classifySkill(
-          skill.accuracy,
-          skill.total
-        ) === "ضعف"
-    )
-    .map(
-      (skill) => skill.name
-    );
+    .filter((skill) => classifySkill(skill.accuracy, skill.total) === "ضعف")
+    .map((skill) => skill.name);
 
-  const totalCorrect =
-    attempts.filter(
-      (attempt) =>
-        attempt.isCorrect
-    ).length;
-
+  const totalCorrect = attempts.filter(
+    (attempt) => attempt.isCorrect
+  ).length;
   const total = attempts.length;
-
-  const accuracy =
-    total > 0
-      ? Math.round(
-          (totalCorrect / total) *
-            100
-        )
-      : 0;
+  const accuracy = total > 0 ? Math.round((totalCorrect / total) * 100) : 0;
 
   return {
     skills,
@@ -1681,30 +1120,15 @@ async function getCachedStudentProfile(
   app: FastifyInstance,
   userId: string
 ): Promise<InternalStudentProfile | null> {
-  const cached =
-    studentProfileCache.get(userId);
+  const cached = studentProfileCache.get(userId);
 
-  if (
-    cached &&
-    Date.now() - cached.at <
-      STUDENT_PROFILE_TTL_MS
-  ) {
+  if (cached && Date.now() - cached.at < STUDENT_PROFILE_TTL_MS) {
     return cached.profile;
   }
 
-  const profile =
-    await buildStudentProfile(
-      app,
-      userId
-    );
+  const profile = await buildStudentProfile(app, userId);
 
-  studentProfileCache.set(
-    userId,
-    {
-      at: Date.now(),
-      profile,
-    }
-  );
+  studentProfileCache.set(userId, { at: Date.now(), profile });
 
   return profile;
 }
@@ -1728,86 +1152,46 @@ async function fetchSimilarQuestion(
   category?: string,
   excludeText?: string
 ): Promise<BankQuestion | null> {
-  const index =
-    await getQuestionIndex(app);
+  const index = await getQuestionIndex(app);
 
-  let pool =
-    index.allQuestions;
+  let pool = index.allQuestions;
 
   if (category) {
-    const wanted =
-      normalizeCategory(category);
+    const wanted = normalizeCategory(category);
 
-    const exact =
-      pool.filter(
-        (item) =>
-          normalizeCategory(
-            item.category
-          ) === wanted
-      );
+    const exact = pool.filter(
+      (item) => normalizeCategory(item.category) === wanted
+    );
 
     if (exact.length > 0) {
       pool = exact;
     } else {
-      pool = pool.filter(
-        (item) => {
-          const itemCategory =
-            normalizeCategory(
-              item.category
-            );
-
-          return (
-            itemCategory.includes(
-              wanted
-            ) ||
-            wanted.includes(
-              itemCategory
-            )
-          );
-        }
-      );
+      pool = pool.filter((item) => {
+        const itemCategory = normalizeCategory(item.category);
+        return itemCategory.includes(wanted) || wanted.includes(itemCategory);
+      });
     }
   }
 
   if (excludeText) {
-    pool = pool.filter(
-      (item) =>
-        item.question !==
-        excludeText
-    );
+    pool = pool.filter((item) => item.question !== excludeText);
   }
 
   if (pool.length === 0) {
     return null;
   }
 
-  const picked =
-    pool[
-      Math.floor(
-        Math.random() *
-          pool.length
-      )
-    ];
+  const picked = pool[Math.floor(Math.random() * pool.length)];
 
   return {
     id: picked.id,
     question: picked.question,
-    options: Array.isArray(
-      picked.options
-    )
-      ? picked.options
-      : [],
+    options: Array.isArray(picked.options) ? picked.options : [],
     correctIndex:
-      typeof picked.correctIndex ===
-      "number"
-        ? picked.correctIndex
-        : 0,
+      typeof picked.correctIndex === "number" ? picked.correctIndex : 0,
     category: picked.category,
-    explanation:
-      picked.explanation,
-    passage: String(
-      picked.passage || ""
-    ),
+    explanation: picked.explanation,
+    passage: String(picked.passage || ""),
   };
 }
 
@@ -1815,15 +1199,8 @@ async function fetchSimilarQuestion(
 // 🔍 النية
 // =========================================================
 
-function detectIntent(
-  question: string
-): {
-  action:
-    | "similar"
-    | "quiz"
-    | "harder"
-    | "easier"
-    | "other";
+function detectIntent(question: string): {
+  action: "similar" | "quiz" | "harder" | "easier" | "other";
 } {
   const q = question.trim();
 
@@ -1832,43 +1209,25 @@ function detectIntent(
       q
     )
   ) {
-    return {
-      action: "similar",
-    };
+    return { action: "similar" };
   }
 
-  if (
-    /أصعب|صعب أكثر|رفع المستوى|أصعب سؤال/.test(
-      q
-    )
-  ) {
-    return {
-      action: "harder",
-    };
+  if (/أصعب|صعب أكثر|رفع المستوى|أصعب سؤال/.test(q)) {
+    return { action: "harder" };
   }
 
-  if (
-    /أسهل|سهل|أبسط|أدنى مستوى/.test(
-      q
-    )
-  ) {
-    return {
-      action: "easier",
-    };
+  if (/أسهل|سهل|أبسط|أدنى مستوى/.test(q)) {
+    return { action: "easier" };
   }
 
-  return {
-    action: "other",
-  };
+  return { action: "other" };
 }
 
 // =========================================================
 // 💾 المحادثة
 // =========================================================
 
-const SESSION_ACTIVE_WINDOW_MS =
-  30 * 60 * 1000;
-
+const SESSION_ACTIVE_WINDOW_MS = 30 * 60 * 1000;
 const MAX_SAVED_CONVERSATION_MESSAGES = 40;
 
 async function loadRecentConversation(
@@ -1876,27 +1235,17 @@ async function loadRecentConversation(
   userId: string
 ) {
   try {
-    const convo =
-      await app.prisma.aiConversation.findFirst(
-        {
-          where: {
-            userId,
-          },
-          orderBy: {
-            updatedAt: "desc",
-          },
-        }
-      );
+    const convo = await app.prisma.aiConversation.findFirst({
+      where: { userId },
+      orderBy: { updatedAt: "desc" },
+    });
 
     if (!convo) {
       return null;
     }
 
     const isStale =
-      Date.now() -
-        new Date(
-          convo.updatedAt
-        ).getTime() >
+      Date.now() - new Date(convo.updatedAt).getTime() >
       SESSION_ACTIVE_WINDOW_MS;
 
     if (isStale) {
@@ -1905,11 +1254,7 @@ async function loadRecentConversation(
 
     return convo;
   } catch (error) {
-    console.error(
-      "loadRecentConversation error:",
-      error
-    );
-
+    console.error("loadRecentConversation error:", error);
     return null;
   }
 }
@@ -1921,125 +1266,57 @@ async function saveConversationTurn(
   assistantText: string
 ) {
   try {
-    const recent =
-      await loadRecentConversation(
-        app,
-        userId
-      );
+    const recent = await loadRecentConversation(app, userId);
 
-    const cleanedAssistant =
-      cleanArabicAssistantText(
-        assistantText
-      );
-
-    const existingMessages =
-      Array.isArray(
-        (recent as any)?.messages
-      )
-        ? (recent as any)
-            .messages
-        : [];
+    const existingMessages = Array.isArray((recent as any)?.messages)
+      ? (recent as any).messages
+      : [];
 
     const updatedMessages = [
       ...existingMessages,
-      {
-        role: "user",
-        text: userText,
-      },
-      {
-        role: "assistant",
-        text: cleanedAssistant,
-      },
-    ].slice(
-      -MAX_SAVED_CONVERSATION_MESSAGES
-    );
+      { role: "user", text: userText },
+      { role: "assistant", text: assistantText },
+    ].slice(-MAX_SAVED_CONVERSATION_MESSAGES);
 
     if (recent) {
-      await app.prisma.aiConversation.update(
-        {
-          where: {
-            id: recent.id,
-          },
-          data: {
-            messages:
-              updatedMessages as any,
-          },
-        }
-      );
+      await app.prisma.aiConversation.update({
+        where: { id: recent.id },
+        data: { messages: updatedMessages as any },
+      });
     } else {
-      await app.prisma.aiConversation.create(
-        {
-          data: {
-            userId,
-            messages:
-              updatedMessages as any,
-          },
-        }
-      );
+      await app.prisma.aiConversation.create({
+        data: { userId, messages: updatedMessages as any },
+      });
     }
   } catch (error) {
-    console.error(
-      "saveConversationTurn error:",
-      error
-    );
+    console.error("saveConversationTurn error:", error);
   }
 }
 
-// =========================================================
-// 🚀 ROUTES
-// =========================================================
-
-export async function aiRoutes(
-  app: FastifyInstance
-) {
-  refreshQuestionIndex(app).catch(
-    (error) => {
-      console.error(
-        "Initial question cache error:",
-        error
-      );
-    }
-  );
+export async function aiRoutes(app: FastifyInstance) {
+  refreshQuestionIndex(app).catch((error) => {
+    console.error("Initial question cache error:", error);
+  });
 
   // =======================================================
   // CORS
   // =======================================================
 
-  app.options(
-    "/ai/ask",
-    async (
-      request,
-      reply
-    ) => {
-      const origin =
-        request.headers.origin ||
-        "*";
+  app.options("/ai/ask", async (request, reply) => {
+    const origin = request.headers.origin || "*";
 
-      return reply
-        .header(
-          "Access-Control-Allow-Origin",
-          origin
-        )
-        .header(
-          "Access-Control-Allow-Credentials",
-          "true"
-        )
-        .header(
-          "Access-Control-Allow-Methods",
-          "POST, OPTIONS"
-        )
-        .header(
-          "Access-Control-Allow-Headers",
-          "Content-Type, Authorization, Cookie"
-        )
-        .header(
-          "Access-Control-Max-Age",
-          "3600"
-        )
-        .status(204)
-        .send();
-    }
-  );
+    return reply
+      .header("Access-Control-Allow-Origin", origin)
+      .header("Access-Control-Allow-Credentials", "true")
+      .header("Access-Control-Allow-Methods", "POST, OPTIONS")
+      .header(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, Cookie"
+      )
+      .header("Access-Control-Max-Age", "3600")
+      .status(204)
+      .send();
+  });
 
   // =======================================================
   // HISTORY
@@ -2047,46 +1324,23 @@ export async function aiRoutes(
 
   app.get(
     "/ai/history",
-    {
-      preHandler:
-        app.authenticate,
-    },
-    async (
-      request,
-      reply
-    ) => {
-      const user =
-        (request as any)
-          .user as
-          | {
-              id?: string;
-            }
-          | undefined;
-
-      const userId =
-        user?.id;
+    { preHandler: app.authenticate },
+    async (request, reply) => {
+      const user = (request as any).user as { id?: string } | undefined;
+      const userId = user?.id;
 
       if (!userId) {
-        return reply
-          .status(401)
-          .send({
-            success: false,
-            message:
-              "يجب تسجيل الدخول.",
-          });
+        return reply.status(401).send({
+          success: false,
+          message: "يجب تسجيل الدخول.",
+        });
       }
 
-      const convo =
-        await loadRecentConversation(
-          app,
-          userId
-        );
+      const convo = await loadRecentConversation(app, userId);
 
       return reply.send({
         success: true,
-        messages:
-          convo?.messages ??
-          [],
+        messages: convo?.messages ?? [],
       });
     }
   );
@@ -2097,40 +1351,17 @@ export async function aiRoutes(
 
   app.get(
     "/ai/quota-status",
-    {
-      preHandler:
-        app.authenticate,
-    },
-    async (
-      _request,
-      reply
-    ) => {
+    { preHandler: app.authenticate },
+    async (_request, reply) => {
       return reply.send({
         success: true,
-        date:
-          pacificDateKey(),
-        models:
-          AI_MODELS.map(
-            ({
-              model,
-              cap,
-            }) => ({
-              model,
-              used:
-                getUsage(
-                  model
-                ),
-              cap,
-              remaining:
-                Math.max(
-                  0,
-                  cap -
-                    getUsage(
-                      model
-                    )
-                ),
-            })
-          ),
+        date: pacificDateKey(),
+        models: AI_MODELS.map(({ model, cap }) => ({
+          model,
+          used: getUsage(model),
+          cap,
+          remaining: Math.max(0, cap - getUsage(model)),
+        })),
       });
     }
   );
@@ -2141,81 +1372,39 @@ export async function aiRoutes(
 
   app.post(
     "/ai/feedback",
-    {
-      preHandler:
-        app.authenticate,
-    },
-    async (
-      request,
-      reply
-    ) => {
-      const user =
-        (request as any)
-          .user as
-          | {
-              id?: string;
-            }
-          | undefined;
-
-      const userId =
-        user?.id;
+    { preHandler: app.authenticate },
+    async (request, reply) => {
+      const user = (request as any).user as { id?: string } | undefined;
+      const userId = user?.id;
 
       if (!userId) {
-        return reply
-          .status(401)
-          .send({
-            success: false,
-            message:
-              "يجب تسجيل الدخول.",
-          });
+        return reply.status(401).send({
+          success: false,
+          message: "يجب تسجيل الدخول.",
+        });
       }
 
-      const {
-        messageIndex,
-        rating,
-      } =
-        request.body as {
-          messageIndex?: number;
-          rating?:
-            | "up"
-            | "down";
-        };
+      const { messageIndex, rating } = request.body as {
+        messageIndex?: number;
+        rating?: "up" | "down";
+      };
 
-      if (
-        rating !== "up" &&
-        rating !== "down"
-      ) {
-        return reply
-          .status(400)
-          .send({
-            success: false,
-            message:
-              "قيمة تقييم غير صالحة.",
-          });
+      if (rating !== "up" && rating !== "down") {
+        return reply.status(400).send({
+          success: false,
+          message: "قيمة تقييم غير صالحة.",
+        });
       }
 
       try {
-        await app.prisma.aiFeedback.create(
-          {
-            data: {
-              userId,
-              messageIndex:
-                messageIndex ??
-                -1,
-              rating,
-            },
-          }
-        );
+        await app.prisma.aiFeedback.create({
+          data: { userId, messageIndex: messageIndex ?? -1, rating },
+        });
       } catch (error) {
-        console.error(
-          "feedback save error:",
-          error
-        );
+        console.error("feedback save error:", error);
       }
 
-      return reply.send({
-        success: true,
-      });
+      return reply.send({ success: true });
     }
   );
 
@@ -2225,239 +1414,146 @@ export async function aiRoutes(
 
   app.post(
     "/ai/ask",
-    {
-      preHandler:
-        app.authenticate,
-    },
-    async (
-      request,
-      reply
-    ) => {
-      // =====================================================
-      // 🔑 التحقق من المفاتيح
-      // =====================================================
-
-      const hasAnyApiKey =
-        AI_MODELS.some(
-          ({
-            apiKeyEnv,
-          }) =>
-            Boolean(
-              process.env[
-                apiKeyEnv
-              ]
-            )
-        );
+    { preHandler: app.authenticate },
+    async (request, reply) => {
+      // ✅ التحقق من وجود مفتاح واحد على الأقل
+      const hasAnyApiKey = AI_MODELS.some(({ apiKeyEnv }) =>
+        Boolean(process.env[apiKeyEnv])
+      );
 
       if (!hasAnyApiKey) {
-        return reply
-          .status(500)
-          .send({
-            success: false,
-            message:
-              "لم يتم إعداد أي مفتاح ذكاء اصطناعي (BAI_API_KEY أو NVIDIA_API_KEY).",
-          });
+        return reply.status(500).send({
+          success: false,
+          message:
+            "لم يتم إعداد أي مفتاح ذكاء اصطناعي (BAI_API_KEY أو NVIDIA_API_KEY).",
+        });
       }
 
       // =====================================================
-      // 🚫 حالة المعلم الذكي
+      // 🚫 فحص حالة المعلم الذكي (الصيانة)
       // =====================================================
 
-      const aiSettings =
-        await getAiSettings(
-          app.prisma
-        );
+      const aiSettings = await getAiSettings(app.prisma);
 
       if (!aiSettings.enabled) {
         return reply
           .status(503)
-          .header(
-            "Retry-After",
-            "300"
-          )
+          .header("Retry-After", "300")
           .send({
             success: false,
             maintenance: true,
-            message:
-              aiSettings.maintenanceMessage,
+            message: aiSettings.maintenanceMessage,
           });
       }
 
-      const user =
-        (request as any)
-          .user as
-          | {
-              id?: string;
-            }
-          | undefined;
-
-      const userId =
-        user?.id;
+      const user = (request as any).user as { id?: string } | undefined;
+      const userId = user?.id;
 
       if (!userId) {
-        return reply
-          .status(401)
-          .send({
-            success: false,
-            message:
-              "يجب تسجيل الدخول.",
-          });
+        return reply.status(401).send({
+          success: false,
+          message: "يجب تسجيل الدخول.",
+        });
       }
 
       // =====================================================
       // ⚡ القراءات المستقلة بالتوازي
       // =====================================================
 
-      const profileStartedAt =
-        Date.now();
+      const profileStartedAt = Date.now();
 
-      const studentProfilePromise =
-        getCachedStudentProfile(
-          app,
-          userId
-        ).catch((error) => {
-          console.error(
-            "AI profile build error:",
-            error
-          );
-
+      const studentProfilePromise = getCachedStudentProfile(app, userId).catch(
+        (error) => {
+          console.error("AI profile build error:", error);
           return null;
-        });
+        }
+      );
 
-      const statsPromise =
-        getPlatformStats(app);
+      const statsPromise = getPlatformStats(app);
 
-      const serverConversationPromise =
-        loadRecentConversation(
-          app,
-          userId
-        ).catch((error) => {
-          console.error(
-            "AI conversation load error:",
-            error
-          );
-
-          return null;
-        });
+      const serverConversationPromise = loadRecentConversation(
+        app,
+        userId
+      ).catch((error) => {
+        console.error("AI conversation load error:", error);
+        return null;
+      });
 
       // =====================================================
       // BODY
       // =====================================================
 
-      const body =
-        request.body as {
-          question?: string;
-
-          currentQuestion?: {
-            question: string;
-            options: string[];
-            correctIndex: number;
-            category?: string;
-            passage?: string;
-            context?: string;
-            passageText?: string;
-            readingPassage?: string;
-            paragraph?: string;
-          };
-
-          history?: Array<{
-            role: string;
-            text: string;
-          }>;
-
-          studentProfile?: {
-            level?: string;
-            solvedQuestions?: number;
-            accuracy?: number;
-            strengths?: string[];
-            weaknesses?: string[];
-          };
+      const body = request.body as {
+        question?: string;
+        currentQuestion?: {
+          question: string;
+          options: string[];
+          correctIndex: number;
+          category?: string;
+          passage?: string;
+          context?: string;
+          passageText?: string;
+          readingPassage?: string;
+          paragraph?: string;
         };
+        history?: Array<{ role: string; text: string }>;
+        studentProfile?: {
+          level?: string;
+          solvedQuestions?: number;
+          accuracy?: number;
+          strengths?: string[];
+          weaknesses?: string[];
+        };
+      };
 
-      const requestedQuestion =
-        String(
-          body?.question ||
-            body?.currentQuestion
-              ?.question ||
-            ""
-        ).trim();
+      const requestedQuestion = String(
+        body?.question || body?.currentQuestion?.question || ""
+      ).trim();
 
       if (!requestedQuestion) {
-        return reply
-          .status(400)
-          .send({
-            success: false,
-            message:
-              "يرجى كتابة سؤال أولاً.",
-          });
+        return reply.status(400).send({
+          success: false,
+          message: "يرجى كتابة سؤال أولاً.",
+        });
       }
 
-      if (
-        requestedQuestion.length >
-        12000
-      ) {
-        return reply
-          .status(400)
-          .send({
-            success: false,
-            message:
-              "السؤال أو قطعة الاستيعاب طويلة جداً. الحد الأقصى 12000 حرف.",
-          });
+      if (requestedQuestion.length > 12000) {
+        return reply.status(400).send({
+          success: false,
+          message: "السؤال أو قطعة الاستيعاب طويلة جداً. الحد الأقصى 12000 حرف.",
+        });
       }
 
       if (
         body?.currentQuestion &&
-        (
-          !Array.isArray(
-            body.currentQuestion
-              .options
-          ) ||
-          body.currentQuestion
-            .options.length < 2 ||
-          !Number.isInteger(
-            body.currentQuestion
-              .correctIndex
-          ) ||
-          body.currentQuestion
-            .correctIndex < 0 ||
-          body.currentQuestion
-            .correctIndex >=
-            body.currentQuestion
-              .options.length
-        )
+        (!Array.isArray(body.currentQuestion.options) ||
+          body.currentQuestion.options.length < 2 ||
+          !Number.isInteger(body.currentQuestion.correctIndex) ||
+          body.currentQuestion.correctIndex < 0 ||
+          body.currentQuestion.correctIndex >=
+            body.currentQuestion.options.length)
       ) {
-        return reply
-          .status(400)
-          .send({
-            success: false,
-            message:
-              "بيانات السؤال الحالي غير صالحة.",
-          });
+        return reply.status(400).send({
+          success: false,
+          message: "بيانات السؤال الحالي غير صالحة.",
+        });
       }
 
       // =====================================================
       // 🚦 RATE LIMIT
       // =====================================================
 
-      const rate =
-        checkRateLimit(
-          userId,
-          aiSettings.hourlyLimit
-        );
+      const rate = checkRateLimit(userId, aiSettings.hourlyLimit);
 
       if (!rate.allowed) {
         recordAiRejection();
 
         return reply
           .status(429)
-          .header(
-            "Retry-After",
-            "60"
-          )
+          .header("Retry-After", "60")
           .send({
             success: false,
-            reason:
-              "hourly_limit",
+            reason: "hourly_limit",
             message:
               "لقد استخدمت الحد الأقصى من الأسئلة لهذه الساعة. حاول مجدداً بعد قليل.",
           });
@@ -2467,167 +1563,92 @@ export async function aiRoutes(
       // 📅 الحد اليومي
       // =====================================================
 
-      const dailyUsage =
-        getDailyUsage(
-          userId
-        );
+      const dailyUsage = getDailyUsage(userId);
 
-      if (
-        dailyUsage >=
-        aiSettings.dailyLimit
-      ) {
+      if (dailyUsage >= aiSettings.dailyLimit) {
         recordAiRejection();
 
-        return reply
-          .status(429)
-          .send({
-            success: false,
-            reason:
-              "daily_limit",
-            message:
-              "لقد وصلت إلى الحد المسموح من استخدام المعلم الذكي حالياً، حاول لاحقاً.",
-          });
+        return reply.status(429).send({
+          success: false,
+          reason: "daily_limit",
+          message:
+            "لقد وصلت إلى الحد المسموح من استخدام المعلم الذكي حالياً، حاول لاحقاً.",
+        });
       }
 
       const contents: Array<{
         role: string;
-        parts: Array<{
-          text: string;
-        }>;
+        parts: Array<{ text: string }>;
       }> = [];
 
       // =====================================================
       // HISTORY
       // =====================================================
 
-      const storedConversation =
-        await serverConversationPromise;
+      const storedConversation = await serverConversationPromise;
 
-      const serverHistory =
-        Array.isArray(
-          (
-            storedConversation as any
-          )?.messages
-        )
-          ? (
-              storedConversation as any
-            ).messages
-          : [];
+      const serverHistory = Array.isArray(
+        (storedConversation as any)?.messages
+      )
+        ? (storedConversation as any).messages
+        : [];
 
       const sourceHistory =
         serverHistory.length > 0
           ? serverHistory
-          : Array.isArray(
-              body?.history
-            )
+          : Array.isArray(body?.history)
           ? body.history
           : [];
 
-      const recentHistory =
-        sourceHistory.slice(
-          -8
-        );
+      const recentHistory = sourceHistory.slice(-8);
 
       for (const message of recentHistory) {
-        const role =
-          message?.role ===
-          "assistant"
-            ? "model"
-            : "user";
+        const role = message?.role === "assistant" ? "model" : "user";
 
-        const text =
-          String(
-            message?.text ||
-              ""
-          )
-            .trim()
-            .slice(
-              0,
-              1500
-            );
+        const text = String(message?.text || "").trim().slice(0, 1500);
 
         if (!text) {
           continue;
         }
 
-        contents.push({
-          role,
-          parts: [
-            {
-              text,
-            },
-          ],
-        });
+        contents.push({ role, parts: [{ text }] });
       }
 
-      let currentCategory:
-        | string
-        | undefined;
+      let currentCategory: string | undefined;
+      let currentQuestionText: string | undefined;
+      let useDeepReasoning = false;
+      let verifiedAnswerHandled = false;
 
-      let currentQuestionText:
-        | string
-        | undefined;
-
-      let useDeepReasoning =
-        false;
-
-      let verifiedAnswerHandled =
-        false;
-
-      const cq =
-        body?.currentQuestion;
+      const cq = body?.currentQuestion;
 
       // =====================================================
       // السؤال الحالي
       // =====================================================
 
-      if (
-        cq &&
-        cq.question
-      ) {
-        currentCategory =
-          normalizeCategory(
-            cq.category
-          ) || undefined;
-
-        currentQuestionText =
-          cq.question;
+      if (cq && cq.question) {
+        currentCategory = normalizeCategory(cq.category) || undefined;
+        currentQuestionText = cq.question;
 
         if (currentCategory) {
-          lastCategoryStore.set(
-            userId,
-            currentCategory
-          );
+          lastCategoryStore.set(userId, currentCategory);
         }
 
         const validOptions =
-          Array.isArray(
-            cq.options
-          ) &&
-          cq.options.length >=
-            2 &&
-          typeof cq.correctIndex ===
-            "number" &&
+          Array.isArray(cq.options) &&
+          cq.options.length >= 2 &&
+          typeof cq.correctIndex === "number" &&
           cq.correctIndex >= 0 &&
-          cq.correctIndex <
-            cq.options.length;
+          cq.correctIndex < cq.options.length;
 
-        const correctOption =
-          validOptions
-            ? cq.options[
-                cq.correctIndex
-              ]
-            : null;
+        const correctOption = validOptions
+          ? cq.options[cq.correctIndex]
+          : null;
 
         // ===================================================
         // القطعة
         // ===================================================
 
-        let passage =
-          typeof cq.passage ===
-          "string"
-            ? cq.passage.trim()
-            : "";
+        let passage = typeof cq.passage === "string" ? cq.passage.trim() : "";
 
         if (!passage) {
           passage = String(
@@ -2639,88 +1660,47 @@ export async function aiRoutes(
           ).trim();
         }
 
-        if (
-          !passage &&
-          cq.question
-        ) {
-          const cached =
-            getCachedQuestionMeta(
-              cq.question
-            );
-
+        if (!passage && cq.question) {
+          const cached = getCachedQuestionMeta(cq.question);
           if (cached?.passage) {
-            passage =
-              cached.passage;
+            passage = cached.passage;
           }
         }
 
-        if (
-          !passage &&
-          cq.question
-        ) {
+        if (!passage && cq.question) {
           try {
-            const index =
-              await getQuestionIndex(
-                app
-              );
-
-            const cached =
-              index.questionMeta.get(
-                cq.question
-              );
-
-            if (
-              cached?.passage
-            ) {
-              passage =
-                cached.passage;
+            const index = await getQuestionIndex(app);
+            const cached = index.questionMeta.get(cq.question);
+            if (cached?.passage) {
+              passage = cached.passage;
             }
           } catch (error) {
-            console.error(
-              "passage lookup error:",
-              error
-            );
+            console.error("passage lookup error:", error);
           }
         }
 
-        useDeepReasoning =
-          shouldUseDeepReasoning(
-            requestedQuestion,
-            currentCategory,
-            passage.length > 0
-          );
+        useDeepReasoning = shouldUseDeepReasoning(
+          requestedQuestion,
+          currentCategory,
+          passage.length > 0
+        );
 
         const isReadingComprehension =
-          currentCategory ===
-            "استيعاب المقروء" ||
-          passage.length > 0;
+          currentCategory === "استيعاب المقروء" || passage.length > 0;
 
         const explainMsg = [
-          `السؤال من قسم ${
-            currentCategory ||
-            "غير محدد"
-          }:`,
+          `السؤال من قسم ${currentCategory || "غير محدد"}:`,
           "",
-          passage
-            ? `قطعة الاستيعاب المقروء:\n${passage}`
-            : "",
+          passage ? `قطعة الاستيعاب المقروء:\n${passage}` : "",
           "",
           "السؤال:",
           cq.question,
           "",
           "الخيارات الموجودة في بنك الأسئلة:",
-          ...(Array.isArray(
-            cq.options
-          )
+          ...(Array.isArray(cq.options)
             ? cq.options
             : []
-          ).map(
-            (
-              option,
-              index
-            ) =>
-              `${index + 1}) ${option}`
-          ),
+          ).map((option, index) => `${index + 1}) ${option}`),
           "",
           correctOption
             ? `الإجابة الصحيحة المؤكدة من بنك الأسئلة: ${correctOption}`
@@ -2745,143 +1725,78 @@ export async function aiRoutes(
           .filter(Boolean)
           .join("\n");
 
-        contents.push({
-          role: "user",
-          parts: [
-            {
-              text: explainMsg,
-            },
-          ],
-        });
+        contents.push({ role: "user", parts: [{ text: explainMsg }] });
       } else {
         // ===================================================
         // سؤال يدوي
         // ===================================================
 
-        const question =
-          (
-            body?.question ||
-            ""
-          ).trim();
+        const question = (body?.question || "").trim();
 
         if (!question) {
-          return reply
-            .status(400)
-            .send({
-              success: false,
-              message:
-                "يرجى كتابة سؤال أولاً.",
-            });
+          return reply.status(400).send({
+            success: false,
+            message: "يرجى كتابة سؤال أولاً.",
+          });
         }
 
         // ===================================================
         // إجابة اختبار معلق
         // ===================================================
 
-        const pending =
-          getPendingQuiz(
-            userId
-          );
+        const pending = getPendingQuiz(userId);
 
         if (pending) {
-          const matchedIndex =
-            matchStudentAnswer(
+          const matchedIndex = matchStudentAnswer(question, pending);
+
+          if (matchedIndex !== null) {
+            const isCorrect = matchedIndex === pending.correctIndex;
+            const correctOption = pending.options[pending.correctIndex];
+            const studentOption = pending.options[matchedIndex];
+
+            currentCategory = pending.category;
+
+            const verificationMsg = [
+              "النظام تحقق برمجياً من إجابة الطالب. لا تعد الحكم على الصحة بنفسك.",
+              "",
+              pending.passage
+                ? `قطعة الاستيعاب المقروء:\n${pending.passage}`
+                : "",
+              "",
+              `السؤال: ${pending.question}`,
+              "",
+              "الخيارات الأصلية:",
+              ...pending.options.map(
+                (option, index) => `${index + 1}) ${option}`
+              ),
+              "",
+              `إجابة الطالب: ${studentOption}`,
+              `الإجابة الصحيحة: ${correctOption}`,
+              `النتيجة المؤكدة: ${isCorrect ? "إجابة صحيحة" : "إجابة خاطئة"}`,
+              "",
+              isCorrect
+                ? "اشرح سبب صحة الإجابة والقاعدة بما يناسب مستوى الطالب."
+                : "اشرح لماذا الإجابة الصحيحة هي الصائبة ولماذا اختيار الطالب كان مشتتاً، بما يناسب مستوى الطالب.",
+              "",
+              "ممنوع اختراع سؤال أو خيارات.",
+            ]
+              .filter(Boolean)
+              .join("\n");
+
+            contents.push({ role: "user", parts: [{ text: verificationMsg }] });
+
+            useDeepReasoning = shouldUseDeepReasoning(
               question,
-              pending
+              pending.category,
+              Boolean(pending.passage)
             );
 
-          if (
-            matchedIndex !== null
-          ) {
-            const isCorrect =
-              matchedIndex ===
-              pending.correctIndex;
-
-            const correctOption =
-              pending.options[
-                pending
-                  .correctIndex
-              ];
-
-            const studentOption =
-              pending.options[
-                matchedIndex
-              ];
-
-            currentCategory =
-              pending.category;
-
-            const verificationMsg =
-              [
-                "النظام تحقق برمجياً من إجابة الطالب. لا تعد الحكم على الصحة بنفسك.",
-                "",
-                pending.passage
-                  ? `قطعة الاستيعاب المقروء:\n${pending.passage}`
-                  : "",
-                "",
-                `السؤال: ${pending.question}`,
-                "",
-                "الخيارات الأصلية:",
-                ...pending.options.map(
-                  (
-                    option,
-                    index
-                  ) =>
-                    `${index + 1}) ${option}`
-                ),
-                "",
-                `إجابة الطالب: ${studentOption}`,
-                `الإجابة الصحيحة: ${correctOption}`,
-                `النتيجة المؤكدة: ${
-                  isCorrect
-                    ? "إجابة صحيحة"
-                    : "إجابة خاطئة"
-                }`,
-                "",
-                isCorrect
-                  ? "اشرح سبب صحة الإجابة والقاعدة بما يناسب مستوى الطالب."
-                  : "اشرح لماذا الإجابة الصحيحة هي الصائبة ولماذا اختيار الطالب كان مشتتاً، بما يناسب مستوى الطالب.",
-                "",
-                "ممنوع اختراع سؤال أو خيارات.",
-              ]
-                .filter(Boolean)
-                .join("\n");
-
-            contents.push({
-              role: "user",
-              parts: [
-                {
-                  text: verificationMsg,
-                },
-              ],
-            });
-
-            useDeepReasoning =
-              shouldUseDeepReasoning(
-                question,
-                pending.category,
-                Boolean(
-                  pending.passage
-                )
-              );
-
-            if (
-              pending.category
-            ) {
-              lastCategoryStore.set(
-                userId,
-                String(
-                  pending.category
-                )
-              );
+            if (pending.category) {
+              lastCategoryStore.set(userId, String(pending.category));
             }
 
-            pendingQuizStore.delete(
-              userId
-            );
-
-            verifiedAnswerHandled =
-              true;
+            pendingQuizStore.delete(userId);
+            verifiedAnswerHandled = true;
           }
         }
 
@@ -2889,62 +1804,34 @@ export async function aiRoutes(
         // الطلب العادي
         // ===================================================
 
-        if (
-          !verifiedAnswerHandled
-        ) {
-          const intent =
-            detectIntent(
-              question
-            );
+        if (!verifiedAnswerHandled) {
+          const intent = detectIntent(question);
 
-          if (
-            intent.action ===
-            "similar"
-          ) {
+          if (intent.action === "similar") {
             const effectiveCategory =
-              currentCategory ||
-              lastCategoryStore.get(
-                userId
-              );
+              currentCategory || lastCategoryStore.get(userId);
+            currentCategory = effectiveCategory;
 
-            currentCategory =
-              effectiveCategory;
-
-            const pendingQuestion =
-              getPendingQuiz(
-                userId
-              );
-
+            const pendingQuestion = getPendingQuiz(userId);
             const exclusionText =
-              currentQuestionText ||
-              pendingQuestion?.question;
+              currentQuestionText || pendingQuestion?.question;
 
-            const bank =
-              await fetchSimilarQuestion(
-                app,
-                effectiveCategory,
-                exclusionText
-              );
+            const bank = await fetchSimilarQuestion(
+              app,
+              effectiveCategory,
+              exclusionText
+            );
 
             if (bank) {
               const bankPassage =
-                typeof bank.passage ===
-                "string"
-                  ? bank.passage.trim()
-                  : "";
+                typeof bank.passage === "string" ? bank.passage.trim() : "";
 
               const validBank =
-                Array.isArray(
-                  bank.options
-                ) &&
-                bank.options.length >=
-                  2 &&
-                typeof bank.correctIndex ===
-                  "number" &&
-                bank.correctIndex >=
-                  0 &&
-                bank.correctIndex <
-                  bank.options.length;
+                Array.isArray(bank.options) &&
+                bank.options.length >= 2 &&
+                typeof bank.correctIndex === "number" &&
+                bank.correctIndex >= 0 &&
+                bank.correctIndex < bank.options.length;
 
               if (!validBank) {
                 contents.push({
@@ -2956,86 +1843,51 @@ export async function aiRoutes(
                   ],
                 });
               } else {
-                const trainingMessage =
-                  [
-                    "الطالب يطلب سؤالاً تدريبياً.",
-                    "",
-                    "هذا سؤال حقيقي من بنك أسئلة قُدرة.",
-                    bankPassage
-                      ? `قطعة الاستيعاب المقروء:\n${bankPassage}`
-                      : "",
-                    `السؤال كما هو في البنك:\n${bank.question}`,
-                    `الخيارات كما هي في البنك:\n${bank.options
-                      .map(
-                        (
-                          option,
-                          index
-                        ) =>
-                          `${index + 1}) ${option}`
-                      )
-                      .join(
-                        "\n"
-                      )}`,
-                    "",
-                    "تعليمات:",
-                    "- اعرض السؤال كما هو.",
-                    "- اعرض الخيارات كما هي.",
-                    "- لا تغير أي كلمة.",
-                    "- لا تكشف الإجابة.",
-                    "- انتظر إجابة الطالب.",
-                    "- ممنوع اختراع سؤال آخر.",
-                  ]
-                    .filter(Boolean)
-                    .join(
-                      "\n\n"
-                    );
+                const trainingMessage = [
+                  "الطالب يطلب سؤالاً تدريبياً.",
+                  "",
+                  "هذا سؤال حقيقي من بنك أسئلة قُدرة.",
+                  bankPassage ? `قطعة الاستيعاب المقروء:\n${bankPassage}` : "",
+                  `السؤال كما هو في البنك:\n${bank.question}`,
+                  `الخيارات كما هي في البنك:\n${bank.options
+                    .map((option, index) => `${index + 1}) ${option}`)
+                    .join("\n")}`,
+                  "",
+                  "تعليمات:",
+                  "- اعرض السؤال كما هو.",
+                  "- اعرض الخيارات كما هي.",
+                  "- لا تغير أي كلمة.",
+                  "- لا تكشف الإجابة.",
+                  "- انتظر إجابة الطالب.",
+                  "- ممنوع اختراع سؤال آخر.",
+                ]
+                  .filter(Boolean)
+                  .join("\n\n");
 
                 contents.push({
                   role: "user",
-                  parts: [
-                    {
-                      text: trainingMessage,
-                    },
-                  ],
+                  parts: [{ text: trainingMessage }],
                 });
 
-                pendingQuizStore.set(
-                  userId,
-                  {
-                    question:
-                      bank.question,
-                    options:
-                      bank.options,
-                    correctIndex:
-                      bank.correctIndex,
-                    category:
-                      bank.category,
-                    passage:
-                      bankPassage,
-                    createdAt:
-                      Date.now(),
-                  }
-                );
+                pendingQuizStore.set(userId, {
+                  question: bank.question,
+                  options: bank.options,
+                  correctIndex: bank.correctIndex,
+                  category: bank.category,
+                  passage: bankPassage,
+                  createdAt: Date.now(),
+                });
 
-                if (
-                  bank.category
-                ) {
-                  currentCategory =
-                    bank.category;
-
-                  lastCategoryStore.set(
-                    userId,
-                    bank.category
-                  );
+                if (bank.category) {
+                  currentCategory = bank.category;
+                  lastCategoryStore.set(userId, bank.category);
                 }
 
-                useDeepReasoning =
-                  shouldUseDeepReasoning(
-                    question,
-                    bank.category,
-                    bankPassage.length >
-                      0
-                  );
+                useDeepReasoning = shouldUseDeepReasoning(
+                  question,
+                  bank.category,
+                  bankPassage.length > 0
+                );
               }
             } else {
               contents.push({
@@ -3049,25 +1901,14 @@ export async function aiRoutes(
             }
           } else {
             currentCategory =
-              currentCategory ||
-              lastCategoryStore.get(
-                userId
-              );
+              currentCategory || lastCategoryStore.get(userId);
 
-            useDeepReasoning =
-              shouldUseDeepReasoning(
-                question,
-                currentCategory
-              );
+            useDeepReasoning = shouldUseDeepReasoning(
+              question,
+              currentCategory
+            );
 
-            contents.push({
-              role: "user",
-              parts: [
-                {
-                  text: question,
-                },
-              ],
-            });
+            contents.push({ role: "user", parts: [{ text: question }] });
           }
         }
       }
@@ -3076,17 +1917,10 @@ export async function aiRoutes(
       // 🧠 نتيجة ملف الطالب
       // =====================================================
 
-      const internalProfile:
-        | InternalStudentProfile
-        | null =
+      const internalProfile: InternalStudentProfile | null =
         await studentProfilePromise;
 
-      console.log(
-        `[AI profile] ${
-          Date.now() -
-          profileStartedAt
-        }ms`
-      );
+      console.log(`[AI profile] ${Date.now() - profileStartedAt}ms`);
 
       // =====================================================
       // 🎯 المهارة الحالية
@@ -3094,38 +1928,26 @@ export async function aiRoutes(
 
       const effectiveCategory =
         normalizeCategory(
-          currentCategory ||
-            cq?.category ||
-            lastCategoryStore.get(
-              userId
-            ) ||
-            ""
+          currentCategory || cq?.category || lastCategoryStore.get(userId) || ""
         ) || undefined;
 
       // =====================================================
       // 🎯 مستوى الشرح
       // =====================================================
 
-      const teaching =
-        determineTeachingDepth(
-          internalProfile,
-          effectiveCategory
-        );
+      const teaching = determineTeachingDepth(
+        internalProfile,
+        effectiveCategory
+      );
 
-      const teachingInstruction =
-        buildTeachingInstruction(
-          teaching.depth
-        );
+      const teachingInstruction = buildTeachingInstruction(teaching.depth);
 
       // =====================================================
       // SYSTEM PROMPT
       // =====================================================
 
-      let dynamicSystemPrompt =
-        BASE_SYSTEM_PROMPT;
-
-      dynamicSystemPrompt +=
-        teachingInstruction;
+      let dynamicSystemPrompt = BASE_SYSTEM_PROMPT;
+      dynamicSystemPrompt += teachingInstruction;
 
       // =====================================================
       // 📊 بيانات الطالب
@@ -3135,90 +1957,57 @@ export async function aiRoutes(
         dynamicSystemPrompt += `
 
 بيانات تعليمية داخلية حقيقية مأخوذة من نتائج الطالب في المنصة.
-
 لا تعرض هذه البيانات للطالب من تلقاء نفسك.
 
 إجمالي أحدث المحاولات المقروءة: ${internalProfile.solvedQuestions}
-
 الدقة العامة في هذه المحاولات: ${internalProfile.accuracy}%
 `;
 
         if (effectiveCategory) {
-          dynamicSystemPrompt += `المهارة الحالية: ${effectiveCategory}
-`;
+          dynamicSystemPrompt += `المهارة الحالية: ${effectiveCategory}\n`;
         }
 
         if (teaching.skill) {
           dynamicSystemPrompt += `
-
 أداء الطالب الحديث في المهارة الحالية:
-
-آخر ${teaching.skill.total} محاولة متاحة.
-
+آخر ${teaching.skill.total} محاولة متاحة:
 الصحيح: ${teaching.skill.correct}
-
 الدقة الحديثة: ${teaching.skill.accuracy}%
 
 الأداء الأوسع في السجل المقروء لهذه المهارة:
-
 عدد المحاولات: ${teaching.skill.historicalTotal}
-
 الصحيح: ${teaching.skill.historicalCorrect}
-
 الدقة: ${teaching.skill.historicalAccuracy}%
 `;
         } else if (effectiveCategory) {
           dynamicSystemPrompt += `
-
 لا توجد عينة كافية ومطابقة للمهارة الحالية.
-
 لا تفترض أن الطالب متقدم أو ضعيف اعتماداً على تخمين.
 `;
         }
 
-        if (
-          internalProfile
-            .strengths.length >
-          0
-        ) {
+        if (internalProfile.strengths.length > 0) {
           dynamicSystemPrompt += `
-
 المهارات ذات الأداء القوي حديثاً:
-
-${internalProfile.strengths.join(
-  "، "
-)}
+${internalProfile.strengths.join("، ")}
 `;
         }
 
-        if (
-          internalProfile
-            .weaknesses.length >
-          0
-        ) {
+        if (internalProfile.weaknesses.length > 0) {
           dynamicSystemPrompt += `
-
 المهارات التي تحتاج عناية أكبر:
-
-${internalProfile.weaknesses.join(
-  "، "
-)}
+${internalProfile.weaknesses.join("، ")}
 `;
         }
-      } else if (
-        body.studentProfile
-      ) {
+      } else if (body.studentProfile) {
         dynamicSystemPrompt += `
 
 لا توجد حتى الآن بيانات كافية محفوظة في QuestionAttempt.
-
 توجد بيانات احتياطية من الواجهة.
-
 استخدمها بحذر ولا تعرضها من تلقاء نفسك.
 
 الدقة العامة: ${
-          body.studentProfile
-            .accuracy != null
+          body.studentProfile.accuracy != null
             ? `${body.studentProfile.accuracy}%`
             : "غير معروفة"
         }
@@ -3229,15 +2018,8 @@ ${internalProfile.weaknesses.join(
       // 🔄 إعادة الشرح
       // =====================================================
 
-      if (
-        !cq &&
-        isConfusionMessage(
-          body.question
-        )
-      ) {
-        dynamicSystemPrompt +=
-          REEXPLAIN_INSTRUCTION;
-
+      if (!cq && isConfusionMessage(body.question)) {
+        dynamicSystemPrompt += REEXPLAIN_INSTRUCTION;
         useDeepReasoning = true;
       }
 
@@ -3246,25 +2028,14 @@ ${internalProfile.weaknesses.join(
       // =====================================================
 
       try {
-        const stats =
-          await statsPromise;
+        const stats = await statsPromise;
 
-        dynamicSystemPrompt +=
-          PLATFORM_KNOWLEDGE
-            .replace(
-              "{SECTIONS_COUNT}",
-              String(
-                stats.sections
-              )
-            )
-            .replace(
-              "{QUESTIONS_COUNT}",
-              String(
-                stats.questions
-              )
-            );
+        dynamicSystemPrompt += PLATFORM_KNOWLEDGE.replace(
+          "{SECTIONS_COUNT}",
+          String(stats.sections)
+        ).replace("{QUESTIONS_COUNT}", String(stats.questions));
       } catch {
-        // لا نوقف الطلب بسبب إحصائيات المنصة.
+        // لا نوقف الطلب بسبب إحصائيات المنصة
       }
 
       // =====================================================
@@ -3274,7 +2045,6 @@ ${internalProfile.weaknesses.join(
       dynamicSystemPrompt += `
 
 تعليمات نهائية للتخصيص:
-
 - مستوى الشرح تم تحديده برمجياً من نتائج الطالب الحقيقية المسجلة في المنصة.
 - إذا توفرت بيانات كافية عن المهارة الحالية، فهي أهم من النسبة العامة.
 - الأداء الحديث أهم من الأخطاء القديمة.
@@ -3285,156 +2055,62 @@ ${internalProfile.weaknesses.join(
 - إذا كان الشرح تأسيسياً، فلا تفترض معرفة الأساس.
 - إذا كان الشرح متقدماً، فلا تكرر الأساسيات دون حاجة.
 - حافظ دائماً على السؤال والخيارات والإجابة المؤكدة من النظام.
-- إذا سأل الطالب عن هويتك كنموذج، فأجب فوراً:
-أنا نموذج {MODEL_IDENTITY}، المعلم الذكي في منصة قُدرة.
-
-تعليمات الإخراج النهائية:
-
-اكتب بالعربية فقط قدر الإمكان.
-
-اكتب نصاً عادياً.
-
-ممنوع Markdown.
-
-ممنوع النجوم.
-
-ممنوع النجمتان.
-
-ممنوع #.
-
-ممنوع backticks.
-
-ممنوع code fences.
-
-ممنوع HTML.
-
-ممنوع زخارف.
-
-ممنوع رموز غريبة.
-
-ممنوع الأقواس المتداخلة.
-
-العناوين تكون في سطر مستقل بدون أي رموز.
-
-راجع الرد قبل إرساله وتأكد من أنه خال من Markdown.
+- إذا سأل الطالب عن هويتك كنموذج، فأجب فوراً: أنا نموذج {MODEL_IDENTITY}، المعلم الذكي في منصة قُدرة.
 `;
 
       // =====================================================
       // ⚙️ إعدادات التوليد
       // =====================================================
 
-      const thinkingLevel =
-        getThinkingLevel(
-          useDeepReasoning
-        );
+      const thinkingLevel = getThinkingLevel(useDeepReasoning);
 
-      /*
-       * 10000 كحد افتراضي يمنح المعلم إجابات أطول وأكثر تفصيلاً.
-       *
-       * 6000 كان يقطع الإجابات الطويلة أحياناً.
-       * يمكن تغييره من Environment Variable.
-       */
-      const MAX_OUTPUT_TOKENS =
-        Number(
-          process.env
-            .AI_MAX_OUTPUT_TOKENS ||
-            10000
-        );
+      const MAX_OUTPUT_TOKENS = Number(
+        process.env.AI_MAX_OUTPUT_TOKENS || 20000
+      );
 
       // =====================================================
       // 📨 OpenAI-compatible Messages
       // =====================================================
 
       const messages: Array<{
-        role:
-          | "system"
-          | "user"
-          | "assistant";
+        role: "system" | "user" | "assistant";
         content: string;
       }> = [
-        {
-          role: "system",
-          content:
-            dynamicSystemPrompt,
-        },
-
-        ...contents.map(
-          (message) => ({
-            role:
-              message.role ===
-              "model"
-                ? ("assistant" as const)
-                : ("user" as const),
-
-            content:
-              message.parts
-                .map(
-                  (part) =>
-                    String(
-                      part?.text ||
-                        ""
-                    )
-                )
-                .join("\n"),
-          })
-        ),
+        { role: "system", content: dynamicSystemPrompt },
+        ...contents.map((message) => ({
+          role: message.role === "model" ? ("assistant" as const) : ("user" as const),
+          content: message.parts.map((part) => String(part?.text || "")).join("\n"),
+        })),
       ];
 
-      // =====================================================
-      // 🤖 بناء Payload
-      // =====================================================
-
+      // ✅ حقن اسم النموذج الحقيقي في رسالة النظام وقت بناء الطلب
+      // GPT-OSS 20B عبر NVIDIA يستخدم reasoning_effort (وليس reasoning).
       const buildPayload = (
         model: string,
         includeReasoning: boolean,
         label: string,
         supportsReasoning: boolean
       ) => {
-        const filledMessages =
-          messages.map(
-            (
-              message,
-              index
-            ) =>
-              index === 0 &&
-              message.role ===
-                "system"
-                ? {
-                    ...message,
-                    content:
-                      message.content
-                        .split(
-                          "{MODEL_IDENTITY}"
-                        )
-                        .join(
-                          label
-                        ),
-                  }
-                : message
-          );
+        const filledMessages = messages.map((message, index) =>
+          index === 0 && message.role === "system"
+            ? {
+                ...message,
+                content: message.content
+                  .split("{MODEL_IDENTITY}")
+                  .join(label),
+              }
+            : message
+        );
 
         const payload: any = {
           model,
-          messages:
-            filledMessages,
+          messages: filledMessages,
           stream: true,
-          max_tokens:
-            MAX_OUTPUT_TOKENS,
-
-          /*
-           * قيمة منخفضة تساعد في تثبيت
-           * أسلوب الكتابة وعدم كثرة
-           * التنسيقات العشوائية.
-           */
-          temperature: 0.2,
+          max_tokens: MAX_OUTPUT_TOKENS,
         };
 
-        if (
-          includeReasoning &&
-          supportsReasoning
-        ) {
-          payload.reasoning_effort =
-            thinkingLevel;
+        if (includeReasoning && supportsReasoning) {
+          payload.reasoning_effort = thinkingLevel;
         }
 
         return payload;
@@ -3444,15 +2120,14 @@ ${internalProfile.weaknesses.join(
       // 🤖 النماذج المتاحة
       // =====================================================
 
-      const availableCandidates:
-        Array<{
-          model: string;
-          label: string;
-          url: string;
-          apiKey: string;
-          supportsReasoning: boolean;
-          cap: number;
-        }> = [];
+      const availableCandidates: Array<{
+        model: string;
+        label: string;
+        url: string;
+        apiKey: string;
+        supportsReasoning: boolean;
+        cap: number;
+      }> = [];
 
       for (const {
         model,
@@ -3462,44 +2137,25 @@ ${internalProfile.weaknesses.join(
         supportsReasoning,
         cap,
       } of AI_MODELS) {
-        const candidateApiKey =
-          process.env[
-            apiKeyEnv
-          ] || "";
+        const candidateApiKey = process.env[apiKeyEnv] || "";
 
         if (!candidateApiKey) {
           console.warn(
             `[AI config] ${model} تم تخطيه: مفتاح ${apiKeyEnv} غير مضبوط`
           );
-
           continue;
         }
 
-        if (
-          isModelAtCap(
-            model,
-            cap
-          )
-        ) {
+        if (isModelAtCap(model, cap)) {
           console.warn(
-            `[AI quota] ${model} وصل للحد اليومي: ${getUsage(
-              model
-            )}/${cap}`
+            `[AI quota] ${model} وصل للحد اليومي: ${getUsage(model)}/${cap}`
           );
-
           continue;
         }
 
-        if (
-          isModelNearCap(
-            model,
-            cap
-          )
-        ) {
+        if (isModelNearCap(model, cap)) {
           console.warn(
-            `[AI quota] ${model} اقترب من الحد: ${getUsage(
-              model
-            )}/${cap}`
+            `[AI quota] ${model} اقترب من الحد: ${getUsage(model)}/${cap}`
           );
         }
 
@@ -3508,8 +2164,7 @@ ${internalProfile.weaknesses.join(
           label,
           cap,
           url,
-          apiKey:
-            candidateApiKey,
+          apiKey: candidateApiKey,
           supportsReasoning,
         });
       }
@@ -3518,404 +2173,223 @@ ${internalProfile.weaknesses.join(
       // 🎛️ ترتيب النماذج
       // =====================================================
 
-      const preferredCandidates =
-        availableCandidates.filter(
-          (candidate) =>
-            candidate.model ===
-            aiSettings.model
-        );
+      const preferredCandidates = availableCandidates.filter(
+        (candidate) => candidate.model === aiSettings.model
+      );
 
-      const otherCandidates =
-        availableCandidates.filter(
-          (candidate) =>
-            candidate.model !==
-            aiSettings.model
-        );
+      const otherCandidates = availableCandidates.filter(
+        (candidate) => candidate.model !== aiSettings.model
+      );
 
-      const candidates = [
-        ...preferredCandidates,
-        ...otherCandidates,
-      ];
+      const candidates = [...preferredCandidates, ...otherCandidates];
 
-      if (
-        candidates.length === 0
-      ) {
-        return reply
-          .status(503)
-          .send({
-            success: false,
-            message:
-              "المعلم الذكي وصل للحد الأقصى من الاستخدام لهذا اليوم.",
-          });
+      if (candidates.length === 0) {
+        return reply.status(503).send({
+          success: false,
+          message: "المعلم الذكي وصل للحد الأقصى من الاستخدام لهذا اليوم.",
+        });
       }
 
       // =====================================================
       // ⏱️ Timeout
       // =====================================================
 
-      const MODEL_TIMEOUT_MS =
-        Number(
-          process.env
-            .AI_REQUEST_TIMEOUT_MS ||
-            30000
-        );
+      const MODEL_TIMEOUT_MS = Number(
+        process.env.AI_REQUEST_TIMEOUT_MS || 30000
+      );
 
-      const STREAM_IDLE_TIMEOUT_MS =
-        Number(
-          process.env
-            .AI_STREAM_IDLE_TIMEOUT_MS ||
-            60000
-        );
+      const STREAM_IDLE_TIMEOUT_MS = Number(
+        process.env.AI_STREAM_IDLE_TIMEOUT_MS || 60000
+      );
 
-      let fullAssistantText =
-        "";
+      let fullAssistantText = "";
+      let lastFinishReason: string | null = null;
+      let inlineStreamError = "";
+      let preloadedReader: ReadableStreamDefaultReader<Uint8Array> | null =
+        null;
+      let preloadedBuffer = "";
 
-      let lastFinishReason:
-        | string
-        | null = null;
+      const outgoingPassage = cq
+        ? String(
+            cq.passage ||
+              cq.context ||
+              cq.passageText ||
+              cq.readingPassage ||
+              cq.paragraph ||
+              ""
+          ).trim()
+        : "";
 
-      let inlineStreamError =
-        "";
-
-      let preloadedReader:
-        | ReadableStreamDefaultReader<Uint8Array>
-        | null = null;
-
-      let preloadedBuffer =
-        "";
-
-      const outgoingPassage =
-        cq
-          ? String(
-              cq.passage ||
-                cq.context ||
-                cq.passageText ||
-                cq.readingPassage ||
-                cq.paragraph ||
-                ""
-            ).trim()
-          : "";
-
-      const outgoingUserText =
-        cq?.question
-          ? [
-              `السؤال: ${cq.question}`,
-              outgoingPassage
-                ? `قطعة الاستيعاب:\n${outgoingPassage}`
-                : "",
-            ]
-              .filter(Boolean)
-              .join("\n\n")
-          : requestedQuestion;
+      const outgoingUserText = cq?.question
+        ? [
+            `السؤال: ${cq.question}`,
+            outgoingPassage ? `قطعة الاستيعاب:\n${outgoingPassage}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+        : requestedQuestion;
 
       // =====================================================
       // 🔄 REQUEST + FAILOVER
       // =====================================================
 
-      let chosen =
-        candidates[0];
+      let chosen = candidates[0];
+      let activeController: AbortController | null = null;
+      let streamIdleTimer: ReturnType<typeof setTimeout> | null = null;
 
-      let activeController:
-        | AbortController
-        | null = null;
+      const abortActiveRequest = () => {
+        if (!reply.raw.writableEnded) {
+          activeController?.abort();
+        }
+        if (streamIdleTimer) {
+          clearTimeout(streamIdleTimer);
+          streamIdleTimer = null;
+        }
+      };
 
-      let streamIdleTimer:
-        | ReturnType<
-            typeof setTimeout
-          >
-        | null = null;
-
-      const abortActiveRequest =
-        () => {
-          if (
-            !reply.raw
-              .writableEnded
-          ) {
-            activeController?.abort();
-          }
-
-          if (
-            streamIdleTimer
-          ) {
-            clearTimeout(
-              streamIdleTimer
-            );
-
-            streamIdleTimer =
-              null;
-          }
-        };
-
-      reply.raw.once(
-        "close",
-        abortActiveRequest
-      );
+      reply.raw.once("close", abortActiveRequest);
 
       try {
-        let upstream:
-          | Response
-          | null = null;
-
-        let lastErrMsg =
-          "";
+        let upstream: Response | null = null;
+        let lastErrMsg = "";
 
         for (const candidate of candidates) {
-          let includeReasoning =
-            true;
-
-          let retriedWithoutReasoning =
-            false;
+          let includeReasoning = true;
+          let retriedWithoutReasoning = false;
 
           while (true) {
-            const controller =
-              new AbortController();
+            const controller = new AbortController();
 
-            const timeout =
-              setTimeout(
-                () =>
-                  controller.abort(),
-                MODEL_TIMEOUT_MS
-              );
+            const timeout = setTimeout(
+              () => controller.abort(),
+              MODEL_TIMEOUT_MS
+            );
 
             try {
-              const requestStartedAt =
-                Date.now();
+              const requestStartedAt = Date.now();
 
               console.log(
                 `[AI] تجربة ${candidate.model} | thinking=${thinkingLevel} | reasoning=${
-                  includeReasoning
-                    ? "on"
-                    : "off"
-                } | usage=${getUsage(
-                  candidate.model
-                )}/${candidate.cap}`
+                  includeReasoning ? "on" : "off"
+                } | usage=${getUsage(candidate.model)}/${candidate.cap}`
               );
 
-              const response =
-                await fetch(
-                  candidate.url,
-                  {
-                    method:
-                      "POST",
-
-                    headers: {
-                      "Content-Type":
-                        "application/json; charset=utf-8",
-
-                      Accept:
-                        "text/event-stream",
-
-                      Authorization:
-                        `Bearer ${candidate.apiKey}`,
-                    },
-
-                    body:
-                      JSON.stringify(
-                        buildPayload(
-                          candidate.model,
-                          includeReasoning,
-                          candidate.label,
-                          candidate.supportsReasoning
-                        )
-                      ),
-
-                    signal:
-                      controller.signal,
-                  }
-                );
+              const response = await fetch(candidate.url, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json; charset=utf-8",
+                  Accept: "text/event-stream",
+                  Authorization: `Bearer ${candidate.apiKey}`,
+                },
+                body: JSON.stringify(
+                  buildPayload(
+                    candidate.model,
+                    includeReasoning,
+                    candidate.label,
+                    candidate.supportsReasoning
+                  )
+                ),
+                signal: controller.signal,
+              });
 
               console.log(
                 `[AI] HTTP ${response.status} via ${candidate.model} in ${
-                  Date.now() -
-                  requestStartedAt
+                  Date.now() - requestStartedAt
                 }ms`
               );
 
-              if (
-                response.ok
-              ) {
-                const probeReader =
-                  response.body?.getReader();
+              if (response.ok) {
+                const probeReader = response.body?.getReader();
 
-                if (
-                  !probeReader
-                ) {
-                  lastErrMsg =
-                    "empty response body";
-
+                if (!probeReader) {
+                  lastErrMsg = "empty response body";
                   console.error(
                     `[AI] ❌ ${candidate.model}: لا يوجد جسم للاستجابة`
                   );
-
                   break;
                 }
 
-                const probeDecoder =
-                  new TextDecoder(
-                    "utf-8"
-                  );
-
-                let probeRaw =
-                  "";
-
-                let probeFailed =
-                  false;
-
-                let probeSawActivity =
-                  false;
-
-                const probeDeadline =
-                  Date.now() +
-                  MODEL_TIMEOUT_MS;
+                const probeDecoder = new TextDecoder("utf-8");
+                let probeRaw = "";
+                let probeFailed = false;
+                let probeSawActivity = false;
+                const probeDeadline = Date.now() + MODEL_TIMEOUT_MS;
 
                 while (
-                  probeRaw.length <
-                    8192 &&
+                  probeRaw.length < 8192 &&
                   !probeFailed &&
                   !probeSawActivity &&
-                  Date.now() <
-                    probeDeadline
+                  Date.now() < probeDeadline
                 ) {
-                  const {
-                    done,
-                    value,
-                  } =
-                    await probeReader.read();
-
+                  const { done, value } = await probeReader.read();
                   if (done) {
                     break;
                   }
 
-                  probeRaw +=
-                    probeDecoder.decode(
-                      value,
-                      {
-                        stream:
-                          true,
-                      }
-                    );
+                  probeRaw += probeDecoder.decode(value, { stream: true });
 
-                  const probeLines =
-                    probeRaw.split(
-                      /\r?\n/
-                    );
-
-                  probeRaw =
-                    probeLines.pop() ||
-                    "";
+                  const probeLines = probeRaw.split(/\r?\n/);
+                  probeRaw = probeLines.pop() || "";
 
                   for (const line of probeLines) {
-                    const trimmedLine =
-                      line.trim();
-
-                    if (
-                      !trimmedLine.startsWith(
-                        "data:"
-                      )
-                    ) {
+                    const trimmedLine = line.trim();
+                    if (!trimmedLine.startsWith("data:")) {
                       continue;
                     }
 
-                    const probeJson =
-                      trimmedLine
-                        .slice(5)
-                        .trim();
-
-                    if (
-                      !probeJson ||
-                      probeJson ===
-                        "[DONE]"
-                    ) {
+                    const probeJson = trimmedLine.slice(5).trim();
+                    if (!probeJson || probeJson === "[DONE]") {
                       continue;
                     }
 
                     try {
-                      const probeChunk =
-                        JSON.parse(
-                          probeJson
-                        );
+                      const probeChunk = JSON.parse(probeJson);
 
                       const probeError =
-                        probeChunk
-                          ?.error
-                          ?.message ||
-                        (typeof probeChunk
-                          ?.error ===
-                        "string"
+                        probeChunk?.error?.message ||
+                        (typeof probeChunk?.error === "string"
                           ? probeChunk.error
                           : "");
 
-                      if (
-                        probeError
-                      ) {
-                        lastErrMsg =
-                          `inline stream error: ${probeError}`;
-
+                      if (probeError) {
+                        lastErrMsg = `inline stream error: ${probeError}`;
                         console.error(
                           `[AI] ❌ ${candidate.model}: ${lastErrMsg}`
                         );
-
-                        probeFailed =
-                          true;
-
+                        probeFailed = true;
                         break;
                       }
 
-                      const deltaData =
-                        probeChunk
-                          ?.choices?.[0]
-                          ?.delta;
-
+                      const deltaData = probeChunk?.choices?.[0]?.delta;
                       const probeContent =
-                        deltaData?.content ||
-                        probeChunk
-                          ?.choices?.[0]
-                          ?.text;
+                        deltaData?.content || probeChunk?.choices?.[0]?.text;
 
-                      const probeReasoning =
-                        deltaData?.reasoning_content;
+                      const probeReasoning = deltaData?.reasoning_content;
 
                       if (
-                        (
-                          typeof probeContent ===
-                          "string" &&
-                          probeContent.length >
-                            0
-                        ) ||
-                        (
-                          typeof probeReasoning ===
-                          "string" &&
-                          probeReasoning.length >
-                            0
-                        )
+                        (typeof probeContent === "string" &&
+                          probeContent.length > 0) ||
+                        (typeof probeReasoning === "string" &&
+                          probeReasoning.length > 0)
                       ) {
-                        probeSawActivity =
-                          true;
-
+                        probeSawActivity = true;
                         break;
                       }
                     } catch {
-                      // chunk غير مكتمل.
+                      // chunk غير مكتمل: يبقى في buffer
                     }
                   }
                 }
 
-                if (
-                  probeFailed ||
-                  !probeSawActivity
-                ) {
+                if (probeFailed || !probeSawActivity) {
                   try {
                     await probeReader.cancel();
                   } catch {
-                    // تجاهل.
+                    // تجاهل
                   }
 
-                  if (
-                    !probeFailed
-                  ) {
-                    lastErrMsg =
-                      "empty stream (no content chunks)";
-
+                  if (!probeFailed) {
+                    lastErrMsg = "empty stream (no content chunks)";
                     console.error(
                       `[AI] ❌ ${candidate.model}: ${lastErrMsg}`
                     );
@@ -3924,90 +2398,55 @@ ${internalProfile.weaknesses.join(
                   break;
                 }
 
-                clearTimeout(
-                  timeout
-                );
+                clearTimeout(timeout);
 
-                upstream =
-                  response;
-
-                chosen =
-                  candidate;
-
-                activeController =
-                  controller;
-
-                preloadedReader =
-                  probeReader;
-
-                preloadedBuffer =
-                  probeRaw;
+                upstream = response;
+                chosen = candidate;
+                activeController = controller;
+                preloadedReader = probeReader;
+                preloadedBuffer = probeRaw;
 
                 break;
               }
 
-              let errorMessage =
-                response.statusText;
+              let errorMessage = response.statusText;
 
               try {
-                const errorBody =
-                  (await response.json()) as any;
-
+                const errorBody = (await response.json()) as any;
                 errorMessage =
-                  errorBody
-                    ?.error
-                    ?.message ||
+                  errorBody?.error?.message ||
                   errorBody?.message ||
                   errorMessage;
               } catch {
-                // لا شيء.
+                // لا شيء
               }
 
-              lastErrMsg =
-                `${response.status} ${errorMessage}`;
-
-              console.error(
-                `[AI] ❌ فشل ${candidate.model}: ${lastErrMsg}`
-              );
+              lastErrMsg = `${response.status} ${errorMessage}`;
+              console.error(`[AI] ❌ فشل ${candidate.model}: ${lastErrMsg}`);
 
               if (
-                response.status ===
-                  400 &&
+                response.status === 400 &&
                 includeReasoning &&
                 !retriedWithoutReasoning
               ) {
-                retriedWithoutReasoning =
-                  true;
-
-                includeReasoning =
-                  false;
-
+                retriedWithoutReasoning = true;
+                includeReasoning = false;
                 console.warn(
                   `[AI] إعادة ${candidate.model} بدون reasoning بسبب HTTP 400`
                 );
-
                 continue;
               }
 
               break;
-            } catch (
-              error: any
-            ) {
-              clearTimeout(
-                timeout
-              );
+            } catch (error: any) {
+              clearTimeout(timeout);
 
               lastErrMsg =
-                error?.name ===
-                "AbortError"
+                error?.name === "AbortError"
                   ? "Request timeout"
-                  : error?.message ||
-                    "fetch error";
+                  : error?.message || "fetch error";
 
-              console.error(
-                `[AI] ❌ خطأ ${candidate.model}: ${lastErrMsg}`
-              );
-
+              console.error(`[AI] ❌ خطأ ${candidate.model}: ${lastErrMsg}`);
               break;
             }
           }
@@ -4018,506 +2457,261 @@ ${internalProfile.weaknesses.join(
         }
 
         if (!upstream) {
-          return reply
-            .status(502)
-            .send({
-              success: false,
-
-              message:
-                /quota|429/i.test(
+          return reply.status(502).send({
+            success: false,
+            message: /quota|429/i.test(lastErrMsg)
+              ? "تم تجاوز حد الاستخدام. حاول مجدداً لاحقاً."
+              : /high demand|overloaded|temporarily unavailable|503|504|timeout/i.test(
                   lastErrMsg
                 )
-                  ? "تم تجاوز حد الاستخدام. حاول مجدداً لاحقاً."
-                  : /high demand|overloaded|temporarily unavailable|503|504|timeout/i.test(
-                      lastErrMsg
-                    )
-                  ? "الخادم مزدحم حالياً. حاول مرة أخرى بعد قليل."
-                  : "تعذر الحصول على إجابة الآن. حاول مرة أخرى.",
-            });
+              ? "الخادم مزدحم حالياً. حاول مرة أخرى بعد قليل."
+              : "تعذر الحصول على إجابة الآن. حاول مرة أخرى.",
+          });
         }
 
         // ===================================================
         // 📊 احتساب النموذج الناجح
         // ===================================================
 
-        const newUsage =
-          incrementUsage(
-            chosen.model
-          );
-
-        console.log(
-          `[AI usage] ${chosen.model}: ${newUsage}/${chosen.cap}`
-        );
+        const newUsage = incrementUsage(chosen.model);
+        console.log(`[AI usage] ${chosen.model}: ${newUsage}/${chosen.cap}`);
 
         // ===================================================
         // 📊 تسجيل الاستخدام
         // ===================================================
 
-        recordAiRequest(
-          userId
-        );
-
-        recordDailyUsage(
-          userId
-        );
+        recordAiRequest(userId);
+        recordDailyUsage(userId);
 
         console.log(
           `[Adaptive Teaching] user=${userId} category=${
-            effectiveCategory ||
-            "unknown"
+            effectiveCategory || "unknown"
           } depth=${teaching.depth} source=${teaching.source} skillAccuracy=${
-            teaching.skill?.accuracy ??
-            "N/A"
-          } skillAttempts=${
-            teaching.skill?.total ??
-            0
-          } thinking=${thinkingLevel}`
+            teaching.skill?.accuracy ?? "N/A"
+          } skillAttempts=${teaching.skill?.total ?? 0} thinking=${thinkingLevel}`
         );
 
         // ===================================================
         // 📡 SSE
         // ===================================================
 
-        const origin =
-          request.headers.origin ||
-          "*";
+        const origin = request.headers.origin || "*";
 
-        reply.raw.writeHead(
-          200,
-          {
-            "Content-Type":
-              "text/event-stream; charset=utf-8",
+        reply.raw.writeHead(200, {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+          "Access-Control-Allow-Origin": origin,
+          "Access-Control-Allow-Credentials": "true",
+        });
 
-            "Cache-Control":
-              "no-cache, no-transform",
+        reply.raw.write(": connected\n\n");
 
-            Connection:
-              "keep-alive",
-
-            "X-Accel-Buffering":
-              "no",
-
-            "Access-Control-Allow-Origin":
-              origin,
-
-            "Access-Control-Allow-Credentials":
-              "true",
-          }
-        );
-
-        reply.raw.write(
-          ": connected\n\n"
-        );
-
-        const reader =
-          preloadedReader;
+        const reader = preloadedReader;
 
         if (!reader) {
           return reply.raw.end();
         }
 
-        const decoder =
-          new TextDecoder(
-            "utf-8"
-          );
-
-        let buffer =
-          preloadedBuffer;
-
-        let emitted =
-          false;
+        const decoder = new TextDecoder("utf-8");
+        let buffer = preloadedBuffer;
+        let emitted = false;
 
         // =================================================
         // 🧩 معالجة chunk واحد
         // =================================================
 
-        const handleParsedChunk =
-          (chunk: any) => {
-            const choice =
-              chunk?.choices?.[0];
+        const handleParsedChunk = (chunk: any) => {
+          const choice = chunk?.choices?.[0];
+          const finishReason = choice?.finish_reason;
 
-            const finishReason =
-              choice?.finish_reason;
-
-            if (
-              typeof finishReason ===
-              "string"
-            ) {
-              lastFinishReason =
-                finishReason;
-
-              if (
-                finishReason !==
-                  "stop" &&
-                finishReason !==
-                  "STOP"
-              ) {
-                console.warn(
-                  `[AI] finishReason غير طبيعي عبر ${chosen.model}: ${finishReason}`
-                );
-              }
-            }
-
-            const deltaContent =
-              choice?.delta?.content;
-
-            const fallbackText =
-              choice?.text;
-
-            const piece =
-              typeof deltaContent ===
-              "string"
-                ? deltaContent
-                : typeof fallbackText ===
-                  "string"
-                ? fallbackText
-                : "";
-
-            const inlineError =
-              chunk?.error
-                ?.message ||
-              (chunk?.error &&
-              typeof chunk.error ===
-                "string"
-                ? chunk.error
-                : "");
-
-            if (
-              inlineError &&
-              !piece
-            ) {
-              inlineStreamError =
-                String(
-                  inlineError
-                );
-
-              console.error(
-                `[AI] ⚠️ خطأ مضمّن في البث عبر ${
-                  chosen?.model ||
-                  "unknown"
-                }: ${inlineStreamError}`
+          if (typeof finishReason === "string") {
+            lastFinishReason = finishReason;
+            if (finishReason !== "stop" && finishReason !== "STOP") {
+              console.warn(
+                `[AI] finishReason غير طبيعي عبر ${chosen.model}: ${finishReason}`
               );
-
-              return;
             }
+          }
 
-            if (!piece) {
-              return;
-            }
+          const deltaContent = choice?.delta?.content;
+          const fallbackText = choice?.text;
 
-            /*
-             * أهم جزء:
-             *
-             * ننظف النص قبل إرساله للواجهة.
-             *
-             * لذلك حتى لو أرسل النموذج:
-             *
-             * **السبب**
-             *
-             * ستصل للواجهة:
-             *
-             * السبب
-             */
+          const piece =
+            typeof deltaContent === "string"
+              ? deltaContent
+              : typeof fallbackText === "string"
+              ? fallbackText
+              : "";
 
-            const cleanedPiece =
-              cleanArabicAssistantText(
-                piece
-              );
+          const inlineError =
+            chunk?.error?.message ||
+            (chunk?.error && typeof chunk.error === "string"
+              ? chunk.error
+              : "");
 
-            if (!cleanedPiece) {
-              return;
-            }
-
-            emitted = true;
-
-            fullAssistantText +=
-              cleanedPiece;
-
-            reply.raw.write(
-              `data: ${JSON.stringify(
-                {
-                  piece:
-                    cleanedPiece,
-                }
-              )}\n\n`
+          if (inlineError && !piece) {
+            inlineStreamError = String(inlineError);
+            console.error(
+              `[AI] ⚠️ خطأ مضمّن في البث عبر ${
+                chosen?.model || "unknown"
+              }: ${inlineStreamError}`
             );
-          };
+            return;
+          }
+
+          if (!piece) {
+            return;
+          }
+
+          emitted = true;
+          fullAssistantText += piece;
+
+          reply.raw.write(`data: ${JSON.stringify({ piece })}\n\n`);
+        };
 
         // =================================================
         // Streaming loop
         // =================================================
 
         while (true) {
-          if (
-            streamIdleTimer
-          ) {
-            clearTimeout(
-              streamIdleTimer
-            );
+          if (streamIdleTimer) {
+            clearTimeout(streamIdleTimer);
           }
 
-          streamIdleTimer =
-            setTimeout(
-              () => {
-                activeController?.abort();
-              },
-              STREAM_IDLE_TIMEOUT_MS
-            );
+          streamIdleTimer = setTimeout(() => {
+            activeController?.abort();
+          }, STREAM_IDLE_TIMEOUT_MS);
 
-          const {
-            done,
-            value,
-          } =
-            await reader.read();
+          const { done, value } = await reader.read();
 
-          if (
-            streamIdleTimer
-          ) {
-            clearTimeout(
-              streamIdleTimer
-            );
-
-            streamIdleTimer =
-              null;
+          if (streamIdleTimer) {
+            clearTimeout(streamIdleTimer);
+            streamIdleTimer = null;
           }
 
           if (done) {
             break;
           }
 
-          buffer +=
-            decoder.decode(
-              value,
-              {
-                stream:
-                  true,
-              }
-            );
+          buffer += decoder.decode(value, { stream: true });
 
-          const lines =
-            buffer.split(
-              /\r?\n/
-            );
-
-          buffer =
-            lines.pop() || "";
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() || "";
 
           for (const line of lines) {
-            const trimmed =
-              line.trim();
-
-            if (
-              !trimmed.startsWith(
-                "data:"
-              )
-            ) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) {
               continue;
             }
 
-            const jsonString =
-              trimmed
-                .slice(5)
-                .trim();
-
-            if (
-              !jsonString ||
-              jsonString ===
-                "[DONE]"
-            ) {
+            const jsonString = trimmed.slice(5).trim();
+            if (!jsonString || jsonString === "[DONE]") {
               continue;
             }
 
             try {
-              const chunk =
-                JSON.parse(
-                  jsonString
-                );
-
-              handleParsedChunk(
-                chunk
-              );
+              const chunk = JSON.parse(jsonString);
+              handleParsedChunk(chunk);
             } catch {
-              // تجاهل chunk غير المكتمل.
+              // تجاهل chunk غير المكتمل
             }
           }
         }
 
-        if (
-          streamIdleTimer
-        ) {
-          clearTimeout(
-            streamIdleTimer
-          );
-
-          streamIdleTimer =
-            null;
+        if (streamIdleTimer) {
+          clearTimeout(streamIdleTimer);
+          streamIdleTimer = null;
         }
 
         // ===================================================
         // آخر Buffer
         // ===================================================
 
-        buffer +=
-          decoder.decode();
+        buffer += decoder.decode();
 
-        const remainingLines =
-          buffer.split(
-            /\r?\n/
-          );
+        const remainingLines = buffer.split(/\r?\n/);
 
         for (const line of remainingLines) {
-          const trimmed =
-            line.trim();
-
-          if (
-            !trimmed.startsWith(
-              "data:"
-            )
-          ) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) {
             continue;
           }
 
-          const jsonString =
-            trimmed
-              .slice(5)
-              .trim();
-
-          if (
-            !jsonString ||
-            jsonString ===
-              "[DONE]"
-          ) {
+          const jsonString = trimmed.slice(5).trim();
+          if (!jsonString || jsonString === "[DONE]") {
             continue;
           }
 
           try {
-            const chunk =
-              JSON.parse(
-                jsonString
-              );
-
-            handleParsedChunk(
-              chunk
-            );
+            const chunk = JSON.parse(jsonString);
+            handleParsedChunk(chunk);
           } catch {
-            // تجاهل.
+            // تجاهل
           }
         }
-
-        // ===================================================
-        // 🧹 تنظيف نهائي كامل
-        // ===================================================
-
-        fullAssistantText =
-          cleanArabicAssistantText(
-            fullAssistantText
-          );
 
         // ===================================================
         // النهاية
         // ===================================================
 
         const truncatedByMaxTokens =
-          lastFinishReason ===
-            "length" ||
-          lastFinishReason ===
-            "MAX_TOKENS";
+          lastFinishReason === "length" || lastFinishReason === "MAX_TOKENS";
 
         if (!emitted) {
           reply.raw.write(
-            `data: ${JSON.stringify(
-              {
-                error:
-                  inlineStreamError ||
-                  "لم تصل إجابة واضحة. حاول إعادة صياغة السؤال.",
-              }
-            )}\n\n`
+            `data: ${JSON.stringify({
+              error: "لم تصل إجابة واضحة. حاول إعادة صياغة السؤال.",
+            })}\n\n`
           );
         } else {
           reply.raw.write(
-            `data: ${JSON.stringify(
-              {
-                done: true,
-                model:
-                  chosen.model,
-                thinkingLevel,
-                truncated:
-                  truncatedByMaxTokens,
-                finishReason:
-                  lastFinishReason ||
-                  undefined,
-              }
-            )}\n\n`
+            `data: ${JSON.stringify({
+              done: true,
+              model: chosen.model,
+              thinkingLevel,
+              truncated: truncatedByMaxTokens,
+              finishReason: lastFinishReason || undefined,
+            })}\n\n`
           );
         }
 
-        if (
-          truncatedByMaxTokens
-        ) {
+        if (truncatedByMaxTokens) {
           console.warn(
             `[AI] الإجابة توقفت بسبب حد التوكنز | user=${userId} | model=${chosen.model} | maxOutputTokens=${MAX_OUTPUT_TOKENS} | thinking=${thinkingLevel}`
           );
         }
-      } catch (
-        error: any
-      ) {
-        console.error(
-          "AI stream failed:",
-          error?.message ||
-            error
-        );
+      } catch (error: any) {
+        console.error("AI stream failed:", error?.message || error);
 
         try {
-          if (
-            !reply.raw
-              .headersSent
-          ) {
-            return reply
-              .status(500)
-              .send({
-                success: false,
-                message:
-                  "حدث خطأ غير متوقع في المعالج.",
-              });
+          if (!reply.raw.headersSent) {
+            return reply.status(500).send({
+              success: false,
+              message: "حدث خطأ غير متوقع في المعالج.",
+            });
           }
 
-          if (
-            !reply.raw
-              .writableEnded
-          ) {
+          if (!reply.raw.writableEnded) {
             reply.raw.write(
-              `data: ${JSON.stringify(
-                {
-                  error:
-                    "تعذر الاتصال بخدمة الذكاء الاصطناعي.",
-                }
-              )}\n\n`
+              `data: ${JSON.stringify({
+                error: "تعذر الاتصال بخدمة الذكاء الاصطناعي.",
+              })}\n\n`
             );
           }
         } catch {
-          // تجاهل.
+          // تجاهل
         }
       } finally {
-        if (
-          streamIdleTimer
-        ) {
-          clearTimeout(
-            streamIdleTimer
-          );
-
-          streamIdleTimer =
-            null;
+        if (streamIdleTimer) {
+          clearTimeout(streamIdleTimer);
+          streamIdleTimer = null;
         }
 
-        reply.raw.removeListener(
-          "close",
-          abortActiveRequest
-        );
+        reply.raw.removeListener("close", abortActiveRequest);
 
-        if (
-          !reply.raw
-            .writableEnded
-        ) {
+        if (!reply.raw.writableEnded) {
           reply.raw.end();
         }
 
@@ -4525,17 +2719,12 @@ ${internalProfile.weaknesses.join(
         // 💾 حفظ المحادثة
         // =================================================
 
-        if (
-          outgoingUserText &&
-          fullAssistantText
-        ) {
+        if (outgoingUserText && fullAssistantText) {
           saveConversationTurn(
             app,
             userId,
             outgoingUserText,
-            cleanArabicAssistantText(
-              fullAssistantText
-            )
+            fullAssistantText
           ).catch(() => {});
         }
       }
