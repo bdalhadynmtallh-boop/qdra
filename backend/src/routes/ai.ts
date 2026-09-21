@@ -15,7 +15,8 @@ import {
    ترتيب النماذج:
    1) GLM 5.3 Flash (مجاني 🎁)
    2) Qwen 3.8 Flash (مجاني 🎁)
-   3) Kimi K3
+   3) OpenAI GPT-OSS 20B — NVIDIA (مجاني 🎁)
+   4) Kimi K3 — NVIDIA
 
    المميزات:
    - Adaptive Teaching
@@ -58,6 +59,7 @@ const AI_MODELS = [
     label: "GLM 5.3 Flash",
     url: "https://api.b.ai/v1/chat/completions",
     apiKeyEnv: "BAI_API_KEY",
+    supportsReasoning: false,
     cap: Number(process.env.GLM_53_FLASH_DAILY_CAP || 1000),
   },
   {
@@ -65,13 +67,23 @@ const AI_MODELS = [
     label: "Qwen 3.8 Flash",
     url: "https://api.b.ai/v1/chat/completions",
     apiKeyEnv: "BAI_API_KEY",
+    supportsReasoning: false,
     cap: Number(process.env.QWEN_38_FLASH_DAILY_CAP || 1000),
+  },
+  {
+    model: "openai/gpt-oss-20b",
+    label: "OpenAI GPT-OSS 20B",
+    url: "https://integrate.api.nvidia.com/v1/chat/completions",
+    apiKeyEnv: "NVIDIA_API_KEY",
+    supportsReasoning: true,
+    cap: Number(process.env.GPT_OSS_20B_DAILY_CAP || 500),
   },
   {
     model: "moonshotai/kimi-k3",
     label: "Kimi K3",
     url: "https://integrate.api.nvidia.com/v1/chat/completions",
     apiKeyEnv: "NVIDIA_API_KEY",
+    supportsReasoning: false,
     cap: Number(process.env.KIMI_K3_DAILY_CAP || 500),
   },
 ] as const;
@@ -2079,18 +2091,13 @@ ${internalProfile.weaknesses.join("، ")}
         })),
       ];
 
-      // ✅ جميع النماذج الثلاثة لا تدعم معامل reasoning
-      const REASONING_UNSUPPORTED = new Set<string>([
-        "moonshotai/kimi-k3",
-        "glm-5.3-flash",
-        "qwen3.8-flash",
-      ]);
-
       // ✅ حقن اسم النموذج الحقيقي في رسالة النظام وقت بناء الطلب
+      // GPT-OSS 20B عبر NVIDIA يستخدم reasoning_effort (وليس reasoning).
       const buildPayload = (
         model: string,
         includeReasoning: boolean,
-        label: string
+        label: string,
+        supportsReasoning: boolean
       ) => {
         const filledMessages = messages.map((message, index) =>
           index === 0 && message.role === "system"
@@ -2110,8 +2117,8 @@ ${internalProfile.weaknesses.join("، ")}
           max_tokens: MAX_OUTPUT_TOKENS,
         };
 
-        if (includeReasoning && !REASONING_UNSUPPORTED.has(model)) {
-          payload.reasoning = { effort: thinkingLevel };
+        if (includeReasoning && supportsReasoning) {
+          payload.reasoning_effort = thinkingLevel;
         }
 
         return payload;
@@ -2126,10 +2133,18 @@ ${internalProfile.weaknesses.join("، ")}
         label: string;
         url: string;
         apiKey: string;
+        supportsReasoning: boolean;
         cap: number;
       }> = [];
 
-      for (const { model, label, url, apiKeyEnv, cap } of AI_MODELS) {
+      for (const {
+        model,
+        label,
+        url,
+        apiKeyEnv,
+        supportsReasoning,
+        cap,
+      } of AI_MODELS) {
         const candidateApiKey = process.env[apiKeyEnv] || "";
 
         if (!candidateApiKey) {
@@ -2158,6 +2173,7 @@ ${internalProfile.weaknesses.join("، ")}
           cap,
           url,
           apiKey: candidateApiKey,
+          supportsReasoning,
         });
       }
 
@@ -2274,7 +2290,12 @@ ${internalProfile.weaknesses.join("، ")}
                   Authorization: `Bearer ${candidate.apiKey}`,
                 },
                 body: JSON.stringify(
-                  buildPayload(candidate.model, includeReasoning, candidate.label)
+                  buildPayload(
+                    candidate.model,
+                    includeReasoning,
+                    candidate.label,
+                    candidate.supportsReasoning
+                  )
                 ),
                 signal: controller.signal,
               });
