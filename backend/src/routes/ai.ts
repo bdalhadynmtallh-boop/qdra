@@ -57,18 +57,10 @@ const AI_MODELS = [
   {
     model: "glm-5.3-flash",
     label: "GLM 5.3 Flash",
-    url: "https://api.b.ai/v1/chat/completions",
+    url: "https://integrate.api.nvidia.com/v1/chat/completions",
     apiKeyEnv: "BAI_API_KEY",
     supportsReasoning: false,
     cap: Number(process.env.GLM_53_FLASH_DAILY_CAP || 1000),
-  },
-  {
-    model: "qwen3.8-flash",
-    label: "Qwen 3.8 Flash",
-    url: "https://api.b.ai/v1/chat/completions",
-    apiKeyEnv: "BAI_API_KEY",
-    supportsReasoning: false,
-    cap: Number(process.env.QWEN_38_FLASH_DAILY_CAP || 1000),
   },
   {
     model: "openai/gpt-oss-20b",
