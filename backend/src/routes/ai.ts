@@ -36,6 +36,7 @@ import {
    - حفظ المحادثة
    - Failover تلقائي
    - Streaming
+   - تنظيف تلقائي للرد من النجوم والأقواس المتداخلة والرموز الغريبة قبل العرض
    - رد فوري عن هوية النموذج باسم النموذج الحقيقي الذي رد فعلياً
 
    تحسينات السرعة:
@@ -194,52 +195,6 @@ setInterval(
   },
   60 * 60 * 1000
 ).unref?.();
-
-// =========================================================
-// 🧠 التفكير
-// =========================================================
-
-const NORMAL_THINKING_LEVEL = "low" as const;
-const DEEP_THINKING_LEVEL = "medium" as const;
-
-function getThinkingLevel(useDeepReasoning: boolean): "low" | "medium" {
-  return useDeepReasoning ? DEEP_THINKING_LEVEL : NORMAL_THINKING_LEVEL;
-}
-
-const DEEP_REASONING_CATEGORIES = new Set([
-  "استيعاب المقروء",
-  "الخطأ السياقي",
-]);
-
-// =========================================================
-// 🧠 فهم أعمق للطلب
-// =========================================================
-
-function shouldUseDeepReasoning(
-  question: string,
-  category?: string,
-  hasPassage: boolean = false
-): boolean {
-  const q = String(question || "").trim();
-
-  if (category && DEEP_REASONING_CATEGORIES.has(normalizeCategory(category))) {
-    return true;
-  }
-
-  if (hasPassage) {
-    return true;
-  }
-
-  if (
-    /حلل|حلّل|لماذا|ليش|قارن|استنتج|استنتاج|فسر|فسّر|اشرح بالتفصيل|بالتفصيل|ما الفرق|العلاقة|السياق|المغزى|السبب|الأدق|الأصح|ناقش/.test(
-      q
-    )
-  ) {
-    return true;
-  }
-
-  return q.length >= 1500;
-}
 
 // =========================================================
 // 🚦 Rate Limiting
@@ -412,6 +367,100 @@ function matchStudentAnswer(
   }
 
   return null;
+}
+
+// =========================================================
+// 🧹 تنظيف نص المعلم من الرموز الغريبة
+// =========================================================
+
+const SANITIZE_HOLD_MAX = 6;
+
+// رموز قد تبدأ منها علامة قابلة للحذف، فنحتجز آخرها مؤقتاً
+// حتى لا تنقسم علامة واحدة مثل ** أو ``` بين قطعتين متتاليتين
+const HOLD_TAIL_PATTERN = /(?:[\*`#_<\\(\[•●◦▪■□◆◇►◄‣]|[ \t]){1,6}$/;
+
+function sanitizeModelText(input: string): string {
+  let text = String(input || "");
+
+  // 1) حذف بلوكات الكود المحاطة بأقواس خلفية
+  text = text.replace(/```[\s\S]*?```/g, " ");
+
+  // 2) حذف الأقواس الخلفية المفردة
+  text = text.replace(/`+/g, "");
+
+  // 3) حذف نجوم التغليظ والمائل كلها
+  text = text.replace(/\*+/g, "");
+
+  // 4) حذف الشرطات السفلية المستخدمة للتوكيد حول الكلمات
+  text = text.replace(
+    /(^|[\s،.:!؟(])_{1,3}([^\s_][^_]*?[^\s_]|[^\s_])_{1,3}(?=[\s،.:!؟)]|$)/g,
+    "$1$2"
+  );
+
+  // 5) حذف رموز العناوين في بداية السطر
+  text = text.replace(/^[ \t]*#{1,6}[ \t]*/gm, "");
+
+  // 6) حذف رموز التنقيط الغريبة في بداية السطر
+  text = text.replace(/^[ \t]*[•●◦▪■□◆◇►◄‣][ \t]*/gm, "");
+
+  // 7) حذف وسوم HTML
+  text = text.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+
+  // 8) إصلاح الأقواس الفارغة والمكررة والمتلاصقة
+  text = text.replace(/\(\s*\)/g, " ");
+  text = text.replace(/\[\s*\]/g, " ");
+  text = text.replace(/\({2,}/g, "(");
+  text = text.replace(/\){2,}/g, ")");
+  text = text.replace(/\[{2,}/g, "[");
+  text = text.replace(/\]{2,}/g, "]");
+  text = text.replace(/\)\s*\(/g, " ");
+
+  // 9) حذف الإيموجي والرموز الرسومية الغريبة من نص الرد
+  text = text.replace(
+    /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{200B}-\u{200D}\u{2060}\u{FE0F}\u{FFFC}]/gu,
+    ""
+  );
+
+  // 10) تحويل المحارف المرئية المخفية إلى أسطر ومسافات حقيقية
+  text = text.replace(/\\n/g, "\n").replace(/\\t/g, " ");
+
+  // 11) تطبيع المسافات والأسطر
+  text = text.replace(/[ \t]+/g, " ");
+  text = text.replace(/ *\n */g, "\n");
+  text = text.replace(/\n{3,}/g, "\n\n");
+
+  return text;
+}
+
+class StreamTextSanitizer {
+  private pending = "";
+
+  push(piece: string): string {
+    if (!piece) {
+      return "";
+    }
+
+    this.pending += piece;
+
+    const match = this.pending.match(HOLD_TAIL_PATTERN);
+    const hold = match ? Math.min(match[0].length, SANITIZE_HOLD_MAX) : 0;
+    const readyLength = this.pending.length - hold;
+
+    if (readyLength <= 0) {
+      return "";
+    }
+
+    const ready = this.pending.slice(0, readyLength);
+    this.pending = this.pending.slice(readyLength);
+
+    return sanitizeModelText(ready);
+  }
+
+  flush(): string {
+    const out = sanitizeModelText(this.pending);
+    this.pending = "";
+    return out;
+  }
 }
 
 // =========================================================
@@ -731,16 +780,23 @@ const BASE_SYSTEM_PROMPT = `
 - لا تستخدم كلمات مشوهة.
 - لا تعرض رموزاً برمجية للطالب.
 - لا تكتب \\n أو \\t كنص ظاهر.
+- استخدم علامات الترقيم العربية الصحيحة: الفاصلة، والنقطة، وعلامة الاستفهام.
+- لا تكتب أقواساً متداخلة أو مكررة مثل (( أو )) أو )( .
+- لا تضع نجوماً أو رموزاً حول الأقواس أو داخلها.
+- إذا ذكرت رقم خيار فاكتبه هكذا: (2) وقود - سيارة، بدون أي رموز إضافية حولها.
 
 تنسيق الرد:
 - استخدم نصاً عادياً فقط.
-- لا تستخدم Markdown.
+- لا تستخدم Markdown إطلاقاً.
 - لا تستخدم علامات الشباك للعناوين.
-- لا تستخدم النجمتين لتغليظ النص.
+- لا تستخدم النجوم للتغليظ أو التمييز إطلاقاً، ولا حتى نجمة واحدة.
+- لا تستخدم الشرطات السفلية للتوكيد.
 - لا تستخدم HTML.
-- اكتب العناوين مباشرة دون رموز.
+- لا تستخدم رموزاً نقطية غريبة مثل النقاط السوداء أو المربعات أو الأسهم.
+- اكتب العنوان سطراً مستقلاً بدون أي رمز قبله أو بعده.
 - استخدم الأسطر الفارغة لتنظيم الشرح.
 - لا تغير نص السؤال أو الخيارات الأصلية من البنك.
+- النظام ينظف ردك من أي رموز غريبة قبل عرضه للطالب، فاكتب نصاً نظيفاً من أول مرة.
 `;
 
 // =========================================================
@@ -2055,6 +2111,7 @@ ${internalProfile.weaknesses.join("، ")}
 - إذا كان الشرح تأسيسياً، فلا تفترض معرفة الأساس.
 - إذا كان الشرح متقدماً، فلا تكرر الأساسيات دون حاجة.
 - حافظ دائماً على السؤال والخيارات والإجابة المؤكدة من النظام.
+- اكتب ردك بنص عربي نظيف: بدون نجوم، بدون Markdown، بدون أقواس متداخلة أو مكررة، وبدون رموز غريبة.
 - إذا سأل الطالب عن هويتك كنموذج، فأجب فوراً: أنا نموذج {MODEL_IDENTITY}، المعلم الذكي في منصة قُدرة.
 `;
 
@@ -2203,6 +2260,7 @@ ${internalProfile.weaknesses.join("، ")}
       );
 
       let fullAssistantText = "";
+      const streamSanitizer = new StreamTextSanitizer();
       let lastFinishReason: string | null = null;
       let inlineStreamError = "";
       let preloadedReader: ReadableStreamDefaultReader<Uint8Array> | null =
@@ -2565,10 +2623,17 @@ ${internalProfile.weaknesses.join("، ")}
             return;
           }
 
-          emitted = true;
-          fullAssistantText += piece;
+          // 🧹 تنظيف القطعة قبل إرسالها للطالب
+          const cleanPiece = streamSanitizer.push(piece);
 
-          reply.raw.write(`data: ${JSON.stringify({ piece })}\n\n`);
+          if (!cleanPiece) {
+            return;
+          }
+
+          emitted = true;
+          fullAssistantText += cleanPiece;
+
+          reply.raw.write(`data: ${JSON.stringify({ piece: cleanPiece })}\n\n`);
         };
 
         // =================================================
@@ -2650,6 +2715,18 @@ ${internalProfile.weaknesses.join("، ")}
           } catch {
             // تجاهل
           }
+        }
+
+        // ===================================================
+        // 🧹 تصريف آخر النص المنظف المتبقي
+        // ===================================================
+
+        const tailPiece = streamSanitizer.flush();
+
+        if (tailPiece) {
+          emitted = true;
+          fullAssistantText += tailPiece;
+          reply.raw.write(`data: ${JSON.stringify({ piece: tailPiece })}\n\n`);
         }
 
         // ===================================================
